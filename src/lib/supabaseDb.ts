@@ -139,6 +139,8 @@ export async function addAttendance(record: AttendanceRecord): Promise<Attendanc
     if (!error) {
       return record;
     }
+    console.error('Supabase addAttendance error:', error);
+    throw new Error(error.message || 'Failed to save attendance in Supabase');
   }
   const db = getDb();
   db.attendance.unshift(record);
@@ -167,6 +169,8 @@ export async function addRoutine(routine: RoutineLog): Promise<RoutineLog> {
     if (!error) {
       return routine;
     }
+    console.error('Supabase addRoutine error:', error);
+    throw new Error(error.message || 'Failed to save routine in Supabase');
   }
   const db = getDb();
   db.routines.unshift(routine);

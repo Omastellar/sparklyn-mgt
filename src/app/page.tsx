@@ -283,16 +283,47 @@ export default function SparklynApp() {
     }
   };
 
-  const handleSelfieFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Compress mobile camera images to prevent 413 payload limit
+  const compressImageFile = (file: File, maxWidth = 1024, quality = 0.75): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(e.target?.result as string);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Failed to read image'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSelfieFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setSelfieImage(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImageFile(file, 800, 0.8);
+      setSelfieImage(compressed);
+    } catch {
+      alert('Failed to process selfie');
+    }
   };
 
   const confirmClockIn = async () => {
@@ -301,7 +332,7 @@ export default function SparklynApp() {
       return;
     }
     try {
-      await fetch('/api/attendance', {
+      const res = await fetch('/api/attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -315,11 +346,16 @@ export default function SparklynApp() {
           accuracyMeters: gpsCoords ? 5 : 0
         })
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to record attendance');
+        return;
+      }
       setClockInDone(true);
       setCleanerScreen('hub');
       refreshData();
-    } catch (e) {
-      alert('Error recording attendance');
+    } catch (e: any) {
+      alert(e.message || 'Error recording attendance');
     }
   };
 
@@ -342,20 +378,19 @@ export default function SparklynApp() {
     setChecklist(next);
   };
 
-  const handleProofPhotoCapture = (type: 'before' | 'after', e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleProofPhotoCapture = async (type: 'before' | 'after', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        if (type === 'before') {
-          setBeforePhoto(reader.result);
-        } else {
-          setAfterPhoto(reader.result);
-        }
+    try {
+      const compressed = await compressImageFile(file, 1024, 0.75);
+      if (type === 'before') {
+        setBeforePhoto(compressed);
+      } else {
+        setAfterPhoto(compressed);
       }
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      alert('Failed to process image capture');
+    }
   };
 
   const submitRoutineAndGoToInventory = async () => {
@@ -370,7 +405,7 @@ export default function SparklynApp() {
       );
       const cycleNumber = todayRoutines.length + 1;
 
-      await fetch('/api/routines', {
+      const res = await fetch('/api/routines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -386,6 +421,13 @@ export default function SparklynApp() {
           afterPhotoUrl: afterPhoto
         })
       });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to submit routine');
+        return;
+      }
+
       // Pre-fill inventory counters with standard
       const initialSupplies: { [key: string]: number } = {};
       inventory.forEach(inv => {
@@ -395,8 +437,8 @@ export default function SparklynApp() {
       setShowAbuseWarning(false);
       setCleanerScreen('inventory');
       refreshData();
-    } catch (e) {
-      alert('Error submitting routine');
+    } catch (e: any) {
+      alert(e.message || 'Error submitting routine');
     }
   };
 
@@ -1369,7 +1411,7 @@ export default function SparklynApp() {
                 {adminTab === 'attendance' && (
                   <div className="space-y-3">
                     <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Morning Attendance Feed</h3>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Morning Attendance Feed ({attendance.length})</h3>
                       <p className="text-[11px] text-zinc-500">Live selfie & GPS geofence checks</p>
                     </div>
 
@@ -1381,22 +1423,59 @@ export default function SparklynApp() {
                         </div>
                       ) : (
                         attendance.map(att => (
-                          <div key={att.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2">
+                          <div key={att.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2.5">
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-xs font-bold text-white">{att.cleanerName}</p>
-                                <p className="text-[11px] text-zinc-400">{att.locationName}</p>
+                                <p className="text-[11px] text-zinc-400">📍 {att.locationName}</p>
                               </div>
-                              <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                                Verified
+                              <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Clocked In
                               </span>
                             </div>
-                            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800">
+
+                            {/* Image with clickable Google Maps overlay button */}
+                            <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800 group">
                               <img src={att.selfieUrl} className="w-full h-full object-cover" alt="Cleaner selfie" />
+                              <a
+                                href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open exact coordinates on Google Maps"
+                                className="absolute bottom-2 right-2 px-2.5 py-1 bg-black/80 hover:bg-black backdrop-blur rounded-lg text-[10px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 border border-emerald-500/30 transition shadow-lg"
+                              >
+                                <MapPin className="w-3 h-3 text-emerald-400" /> Open on Map ↗
+                              </a>
                             </div>
-                            <p className="text-[10px] font-mono text-zinc-400">
-                              📍 {att.latitude.toFixed(4)}° N, {att.longitude.toFixed(4)}° E
-                            </p>
+
+                            {/* Clock-in Time & Clickable Coordinates */}
+                            <div className="space-y-1 pt-0.5">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-zinc-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-zinc-500" />
+                                  Clocked In: <span className="text-zinc-200 font-medium">
+                                    {att.timestamp ? new Date(att.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now'}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] text-zinc-500 font-mono">
+                                  {att.timestamp ? new Date(att.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                                </span>
+                              </div>
+
+                              <a
+                                href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Click to view location in Google Maps"
+                                className="text-[10px] font-mono text-zinc-400 hover:text-emerald-400 flex items-center gap-1 transition group"
+                              >
+                                <MapPin className="w-3 h-3 text-emerald-400" />
+                                <span className="group-hover:underline">
+                                  {Number(att.latitude).toFixed(5)}° N, {Number(att.longitude).toFixed(5)}° E
+                                </span>
+                                <span className="text-[9px] text-emerald-400/80">(Tap for GPS Map)</span>
+                              </a>
+                            </div>
                           </div>
                         ))
                       )}
@@ -1408,7 +1487,7 @@ export default function SparklynApp() {
                 {adminTab === 'proofs' && (
                   <div className="space-y-3">
                     <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Routine Photo Proofs</h3>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Routine Photo Proofs ({routines.length})</h3>
                       <p className="text-[11px] text-zinc-500">Audited multiple times per day</p>
                     </div>
 
@@ -1426,7 +1505,9 @@ export default function SparklynApp() {
                                 <p className="text-xs font-bold text-white">{rout.taskTitle}</p>
                                 <p className="text-[11px] text-zinc-400">{rout.cleanerName} • {rout.locationName}</p>
                               </div>
-                              <span className="text-[10px] text-emerald-400 font-medium">Approved SOP</span>
+                              <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                Cycle {rout.cycleNumber || 1} • Verified
+                              </span>
                             </div>
 
                             <div className="grid grid-cols-2 gap-2">
@@ -1442,6 +1523,16 @@ export default function SparklynApp() {
                                   <img src={rout.afterPhotoUrl} className="w-full h-full object-cover" alt="After clean" />
                                 </div>
                               </div>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/60">
+                              <span className="flex items-center gap-1 text-zinc-300">
+                                <Clock className="w-3 h-3 text-zinc-500" />
+                                Completed: {rout.completedAt ? new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
+                              </span>
+                              <span className="text-zinc-500 font-mono">
+                                {rout.completedAt ? new Date(rout.completedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                              </span>
                             </div>
                           </div>
                         ))
