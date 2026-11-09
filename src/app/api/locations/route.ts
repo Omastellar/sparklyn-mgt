@@ -3,6 +3,9 @@ import { getLocations, addLocation, updateLocation } from '../../../lib/supabase
 import { Location } from '../../../lib/db';
 import { isRequestAuthorizedAsAdmin } from '../../../lib/auth';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   const locations = await getLocations();
   return NextResponse.json({ success: true, locations });

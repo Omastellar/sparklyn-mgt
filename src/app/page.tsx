@@ -146,6 +146,15 @@ export default function SparklynApp() {
   const [restockQty, setRestockQty] = useState(20);
   const [restockNotes, setRestockNotes] = useState('');
 
+  // Add Item Modal
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemUnit, setNewItemUnit] = useState('bottles');
+  const [newItemAllowance, setNewItemAllowance] = useState(1);
+  const [newItemStock, setNewItemStock] = useState(10);
+  const [newItemMinAlert, setNewItemMinAlert] = useState(5);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfieInputRef = useRef<HTMLInputElement | null>(null);
   const beforeInputRef = useRef<HTMLInputElement | null>(null);
@@ -153,13 +162,16 @@ export default function SparklynApp() {
 
   // Load Initial Data
   const refreshData = async () => {
+    setIsRefreshing(true);
     try {
+      const headers = { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' };
+      const cacheBust = '?t=' + Date.now();
       const [locRes, cleanRes, attRes, routRes, invRes] = await Promise.all([
-        fetch('/api/locations').then(r => r.json()),
-        fetch('/api/cleaners').then(r => r.json()),
-        fetch('/api/attendance').then(r => r.json()),
-        fetch('/api/routines').then(r => r.json()),
-        fetch('/api/inventory').then(r => r.json())
+        fetch('/api/locations' + cacheBust, { cache: 'no-store', headers }).then(r => r.json()).catch(() => ({})),
+        fetch('/api/cleaners' + cacheBust, { cache: 'no-store', headers }).then(r => r.json()).catch(() => ({})),
+        fetch('/api/attendance' + cacheBust, { cache: 'no-store', headers }).then(r => r.json()).catch(() => ({})),
+        fetch('/api/routines' + cacheBust, { cache: 'no-store', headers }).then(r => r.json()).catch(() => ({})),
+        fetch('/api/inventory' + cacheBust, { cache: 'no-store', headers }).then(r => r.json()).catch(() => ({}))
       ]);
 
       if (locRes.locations) setLocations(locRes.locations);
@@ -170,6 +182,8 @@ export default function SparklynApp() {
       if (invRes.usageLogs) setUsageLogs(invRes.usageLogs);
     } catch (err) {
       console.error('Failed to load data', err);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -177,6 +191,16 @@ export default function SparklynApp() {
     refreshData();
     checkAdminAuth();
   }, []);
+
+  // Poll for updates in Admin view
+  useEffect(() => {
+    if (adminUnlocked && role === 'admin') {
+      const timer = setInterval(() => {
+        refreshData();
+      }, 10000);
+      return () => clearInterval(timer);
+    }
+  }, [adminUnlocked, role]);
 
   // Handle Cleaner Login by Phone Number
   const handleCleanerLogin = async (overridePhone?: string) => {
@@ -466,6 +490,7 @@ export default function SparklynApp() {
         }
         setAdminError('');
         setAdminPasswordInput('');
+        refreshData();
       } else {
         setAdminError(data.error || 'Invalid admin credentials');
       }
@@ -631,6 +656,58 @@ export default function SparklynApp() {
       alert(`Restocked +${restockQty} units!`);
     } catch (e: any) {
       alert(e.message || 'Error logging restock');
+    }
+  };
+
+  // Add Custom Inventory Item
+  const saveNewInventoryItem = async () => {
+    if (!newItemName.trim() || !newItemUnit.trim()) {
+      alert('Item name and unit of measurement are required');
+      return;
+    }
+    try {
+      const res = await fetch('/api/inventory', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: newItemName,
+          unit: newItemUnit,
+          standardAllowancePerCycle: newItemAllowance,
+          currentStock: newItemStock,
+          minStockAlert: newItemMinAlert
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to add item');
+        return;
+      }
+      setShowAddItemModal(false);
+      setNewItemName('');
+      setNewItemStock(10);
+      refreshData();
+      alert(`Item "${newItemName}" added successfully!`);
+    } catch (e: any) {
+      alert(e.message || 'Error adding inventory item');
+    }
+  };
+
+  // Delete Inventory Item
+  const deleteItem = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to remove "${name}" from inventory?`)) return;
+    try {
+      const res = await fetch(`/api/inventory?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to delete item');
+        return;
+      }
+      refreshData();
+    } catch (e: any) {
+      alert(e.message || 'Error deleting item');
     }
   };
 
@@ -1023,31 +1100,38 @@ export default function SparklynApp() {
                 <p className="text-xs text-zinc-400">Enter supplies consumed during this cycle to keep inventory balances accurate.</p>
 
                 <div className="space-y-2">
-                  {inventory.map(item => (
-                    <div key={item.id} className="p-3 bg-zinc-900/50 border border-zinc-800/80 rounded-xl flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-semibold text-white">{item.name}</p>
-                        <p className="text-[10px] text-zinc-400">Standard SOP: ~{item.standardAllowancePerCycle} {item.unit}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => adjustSupply(item.id, -(item.standardAllowancePerCycle || 1))}
-                          className="w-7 h-7 rounded-lg bg-zinc-800 text-white font-bold text-xs"
-                        >
-                          -
-                        </button>
-                        <span className="text-xs font-mono font-semibold w-14 text-center">
-                          {selectedSupplies[item.id] || 0} {item.unit}
-                        </span>
-                        <button
-                          onClick={() => adjustSupply(item.id, (item.standardAllowancePerCycle || 1))}
-                          className="w-7 h-7 rounded-lg bg-zinc-800 text-white font-bold text-xs"
-                        >
-                          +
-                        </button>
-                      </div>
+                  {inventory.length === 0 ? (
+                    <div className="p-4 text-center bg-zinc-900/40 border border-zinc-800 rounded-xl text-xs text-zinc-400">
+                      <p className="font-semibold text-white">No supplies tracked</p>
+                      <p className="text-[11px] text-zinc-500 mt-0.5">Your manager has not configured any tracked cleaning items yet.</p>
                     </div>
-                  ))}
+                  ) : (
+                    inventory.map(item => (
+                      <div key={item.id} className="p-3 bg-zinc-900/50 border border-zinc-800/80 rounded-xl flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-white">{item.name}</p>
+                          <p className="text-[10px] text-zinc-400">Standard SOP: ~{item.standardAllowancePerCycle} {item.unit}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => adjustSupply(item.id, -(item.standardAllowancePerCycle || 1))}
+                            className="w-7 h-7 rounded-lg bg-zinc-800 text-white font-bold text-xs"
+                          >
+                            -
+                          </button>
+                          <span className="text-xs font-mono font-semibold w-14 text-center">
+                            {selectedSupplies[item.id] || 0} {item.unit}
+                          </span>
+                          <button
+                            onClick={() => adjustSupply(item.id, (item.standardAllowancePerCycle || 1))}
+                            className="w-7 h-7 rounded-lg bg-zinc-800 text-white font-bold text-xs"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 {/* Abuse Warning Banner */}
@@ -1123,9 +1207,9 @@ export default function SparklynApp() {
               <div className="space-y-4">
 
                 {/* Subtab Pills */}
-                <div className="flex overflow-x-auto no-scrollbar gap-1.5 pb-1 border-b border-zinc-800/60 text-xs">
+                <div className="flex overflow-x-auto no-scrollbar gap-1.5 pb-1 border-b border-zinc-800/60 text-xs items-center">
                   <button
-                    onClick={() => setAdminTab('locations')}
+                    onClick={() => { setAdminTab('locations'); refreshData(); }}
                     className={`px-3 py-1.5 rounded-lg flex-shrink-0 transition ${
                       adminTab === 'locations' ? 'bg-zinc-100 text-zinc-950 font-semibold' : 'text-zinc-400 hover:text-white'
                     }`}
@@ -1133,7 +1217,7 @@ export default function SparklynApp() {
                     Locations ({locations.length})
                   </button>
                   <button
-                    onClick={() => setAdminTab('cleaners')}
+                    onClick={() => { setAdminTab('cleaners'); refreshData(); }}
                     className={`px-3 py-1.5 rounded-lg flex-shrink-0 transition ${
                       adminTab === 'cleaners' ? 'bg-zinc-100 text-zinc-950 font-semibold' : 'text-zinc-400 hover:text-white'
                     }`}
@@ -1141,15 +1225,15 @@ export default function SparklynApp() {
                     Cleaners ({cleaners.length})
                   </button>
                   <button
-                    onClick={() => setAdminTab('attendance')}
+                    onClick={() => { setAdminTab('attendance'); refreshData(); }}
                     className={`px-3 py-1.5 rounded-lg flex-shrink-0 transition ${
                       adminTab === 'attendance' ? 'bg-zinc-100 text-zinc-950 font-semibold' : 'text-zinc-400 hover:text-white'
                     }`}
                   >
-                    Live Attendance
+                    Live Attendance ({attendance.length})
                   </button>
                   <button
-                    onClick={() => setAdminTab('proofs')}
+                    onClick={() => { setAdminTab('proofs'); refreshData(); }}
                     className={`px-3 py-1.5 rounded-lg flex-shrink-0 transition ${
                       adminTab === 'proofs' ? 'bg-zinc-100 text-zinc-950 font-semibold' : 'text-zinc-400 hover:text-white'
                     }`}
@@ -1157,12 +1241,20 @@ export default function SparklynApp() {
                     Proofs ({routines.length})
                   </button>
                   <button
-                    onClick={() => setAdminTab('inventory')}
+                    onClick={() => { setAdminTab('inventory'); refreshData(); }}
                     className={`px-3 py-1.5 rounded-lg flex-shrink-0 transition ${
                       adminTab === 'inventory' ? 'bg-zinc-100 text-zinc-950 font-semibold' : 'text-zinc-400 hover:text-white'
                     }`}
                   >
-                    Inventory & Abuse
+                    Inventory ({inventory.length})
+                  </button>
+
+                  <button
+                    onClick={refreshData}
+                    title="Refresh data"
+                    className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition flex items-center"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                   </button>
 
                   <button
@@ -1363,33 +1455,70 @@ export default function SparklynApp() {
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Inventory & Abuse</h3>
-                        <p className="text-[11px] text-zinc-500">Restocks vs cleaner consumption</p>
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Inventory & Supplies</h3>
+                        <p className="text-[11px] text-zinc-500">Track facility chemicals & consumables</p>
                       </div>
-                      <button
-                        onClick={() => setShowRestockModal(true)}
-                        className="px-2.5 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-lg text-xs transition flex items-center gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> Restock
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setShowAddItemModal(true)}
+                          className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold rounded-lg text-xs transition flex items-center gap-1 border border-zinc-700"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add Item
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (inventory.length === 0) {
+                              alert('Please add at least one inventory item first using "+ Add Item"');
+                              return;
+                            }
+                            setShowRestockModal(true);
+                          }}
+                          className="px-2.5 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-lg text-xs transition flex items-center gap-1"
+                        >
+                          <Package className="w-3.5 h-3.5" /> Restock
+                        </button>
+                      </div>
                     </div>
 
                     {/* Stock Grid */}
-                    <div className="grid grid-cols-2 gap-2">
-                      {inventory.map(item => (
-                        <div key={item.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl">
-                          <span className="text-[10px] text-zinc-400 block">{item.name}</span>
-                          <p className="text-base font-bold text-white mt-0.5">
-                            {item.currentStock} <span className="text-xs font-normal text-zinc-400">{item.unit}</span>
-                          </p>
-                          <p className="text-[10px] text-zinc-500 mt-1">SOP: ~{item.standardAllowancePerCycle}/cycle</p>
+                    {inventory.length === 0 ? (
+                      <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-2">
+                        <Package className="w-8 h-8 text-zinc-600 mx-auto" />
+                        <div>
+                          <p className="font-semibold text-white">No inventory items added yet</p>
+                          <p className="text-[11px] text-zinc-500 mt-0.5">Click "+ Add Item" to configure the real chemicals and cleaning supplies used by cleaners.</p>
                         </div>
-                      ))}
-                    </div>
+                        <button
+                          onClick={() => setShowAddItemModal(true)}
+                          className="mt-1 px-3 py-1.5 bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold rounded-lg"
+                        >
+                          + Add First Item
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        {inventory.map(item => (
+                          <div key={item.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl relative group">
+                            <button
+                              onClick={() => deleteItem(item.id, item.name)}
+                              title="Delete item"
+                              className="absolute top-2 right-2 p-1 text-zinc-500 hover:text-rose-400 rounded opacity-60 hover:opacity-100 transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-[10px] text-zinc-400 block pr-4 truncate font-medium">{item.name}</span>
+                            <p className="text-base font-bold text-white mt-0.5">
+                              {item.currentStock} <span className="text-xs font-normal text-zinc-400">{item.unit}</span>
+                            </p>
+                            <p className="text-[10px] text-zinc-500 mt-1">SOP: ~{item.standardAllowancePerCycle} {item.unit}/cycle</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Flagged Abuse Logs */}
                     <div className="space-y-2 pt-1">
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Supply Audit Logs</h4>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Supply Audit Logs ({usageLogs.length})</h4>
                       {usageLogs.length === 0 ? (
                         <div className="p-4 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-xs text-zinc-500">
                           <p>No supply usage logged yet.</p>
@@ -1658,6 +1787,90 @@ export default function SparklynApp() {
                 className="flex-1 py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs"
               >
                 Add to Stock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: ADD CUSTOM INVENTORY ITEM */}
+      {showAddItemModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-t-3xl sm:rounded-2xl p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+              <h3 className="text-sm font-bold text-white">Add Inventory Item</h3>
+              <button onClick={() => setShowAddItemModal(false)} className="text-zinc-400 hover:text-white">✕</button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium text-zinc-400 mb-1">Item Name</label>
+                <input
+                  type="text"
+                  value={newItemName}
+                  onChange={e => setNewItemName(e.target.value)}
+                  placeholder="e.g. Toilet Bowl Cleaner, Bleach, Floor Wash"
+                  className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-medium text-zinc-400 mb-1">Unit of Measurement</label>
+                  <input
+                    type="text"
+                    value={newItemUnit}
+                    onChange={e => setNewItemUnit(e.target.value)}
+                    placeholder="e.g. bottles, rolls, liters"
+                    className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-zinc-400 mb-1">Initial Stock</label>
+                  <input
+                    type="number"
+                    value={newItemStock}
+                    onChange={e => setNewItemStock(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-medium text-zinc-400 mb-1">SOP per Cycle</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={newItemAllowance}
+                    onChange={e => setNewItemAllowance(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-zinc-400 mb-1">Min Stock Alert</label>
+                  <input
+                    type="number"
+                    value={newItemMinAlert}
+                    onChange={e => setNewItemMinAlert(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-white font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-2">
+              <button
+                onClick={() => setShowAddItemModal(false)}
+                className="flex-1 py-2.5 bg-zinc-800 text-zinc-300 font-medium rounded-xl text-xs hover:bg-zinc-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNewInventoryItem}
+                className="flex-1 py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs"
+              >
+                Save Item
               </button>
             </div>
           </div>

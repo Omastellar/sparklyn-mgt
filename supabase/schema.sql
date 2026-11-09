@@ -108,12 +108,3 @@ CREATE POLICY "Allow all on routines" ON public.routines FOR ALL USING (true) WI
 CREATE POLICY "Allow all on inventory" ON public.inventory FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on restocks" ON public.restocks FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on usage_logs" ON public.usage_logs FOR ALL USING (true) WITH CHECK (true);
-
--- Seed Initial Inventory Items
-INSERT INTO public.inventory ("id", "name", "unit", "standardAllowancePerCycle", "currentStock", "minStockAlert")
-VALUES
-  ('inv-1', 'Disinfectant / Bleach (5L)', 'bottles', 50, 0, 5),
-  ('inv-2', 'Trash Bags (Heavy Duty)', 'rolls', 1, 0, 20),
-  ('inv-3', 'Hand Soap Refill (5L)', 'gallons', 0.1, 0, 5),
-  ('inv-4', 'Microfiber Cleaning Towels', 'packs', 1, 0, 10)
-ON CONFLICT ("id") DO NOTHING;

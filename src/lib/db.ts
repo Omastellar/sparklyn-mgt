@@ -108,40 +108,7 @@ const INITIAL_DATA: DatabaseSchema = {
   cleaners: [],
   attendance: [],
   routines: [],
-  inventory: [
-    {
-      id: 'inv-1',
-      name: 'Disinfectant / Bleach (5L)',
-      unit: 'bottles',
-      standardAllowancePerCycle: 50, // ml
-      currentStock: 0,
-      minStockAlert: 5
-    },
-    {
-      id: 'inv-2',
-      name: 'Trash Bags (Heavy Duty)',
-      unit: 'rolls',
-      standardAllowancePerCycle: 1, // unit
-      currentStock: 0,
-      minStockAlert: 20
-    },
-    {
-      id: 'inv-3',
-      name: 'Hand Soap Refill (5L)',
-      unit: 'gallons',
-      standardAllowancePerCycle: 0.1,
-      currentStock: 0,
-      minStockAlert: 5
-    },
-    {
-      id: 'inv-4',
-      name: 'Microfiber Cleaning Towels',
-      unit: 'packs',
-      standardAllowancePerCycle: 1,
-      currentStock: 0,
-      minStockAlert: 10
-    }
-  ],
+  inventory: [],
   restocks: [],
   usageLogs: []
 };

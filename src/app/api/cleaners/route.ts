@@ -3,6 +3,9 @@ import { getCleaners, addCleaner, getLocations } from '../../../lib/supabaseDb';
 import { Cleaner } from '../../../lib/db';
 import { isRequestAuthorizedAsAdmin } from '../../../lib/auth';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   const cleaners = await getCleaners();
   return NextResponse.json({ success: true, cleaners });

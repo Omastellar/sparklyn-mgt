@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { getRoutines, addRoutine } from '../../../lib/supabaseDb';
 import { RoutineLog } from '../../../lib/db';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   const routines = await getRoutines();
   return NextResponse.json({ success: true, routines });

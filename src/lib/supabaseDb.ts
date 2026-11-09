@@ -182,14 +182,14 @@ export async function getInventoryData(): Promise<{
 }> {
   if (isSupabaseConfigured && supabaseAdmin) {
     const [invRes, restockRes, usageRes] = await Promise.all([
-      supabaseAdmin.from('inventory').select('*').order('id', { ascending: true }),
+      supabaseAdmin.from('inventory').select('*').order('name', { ascending: true }),
       supabaseAdmin.from('restocks').select('*').order('timestamp', { ascending: false }),
       supabaseAdmin.from('usage_logs').select('*').order('timestamp', { ascending: false })
     ]);
 
-    if (!invRes.error && invRes.data && invRes.data.length > 0) {
+    if (!invRes.error) {
       return {
-        inventory: invRes.data as InventoryItem[],
+        inventory: (invRes.data || []) as InventoryItem[],
         restocks: (restockRes.data || []) as RestockLog[],
         usageLogs: (usageRes.data || []) as CleanerUsageLog[]
       };
@@ -201,6 +201,32 @@ export async function getInventoryData(): Promise<{
     restocks: db.restocks,
     usageLogs: db.usageLogs
   };
+}
+
+export async function addInventoryItem(item: InventoryItem): Promise<InventoryItem> {
+  if (isSupabaseConfigured && supabaseAdmin) {
+    const { error } = await supabaseAdmin.from('inventory').insert(item);
+    if (!error) return item;
+    console.error('Supabase addInventoryItem error:', error);
+    throw new Error(error.message || 'Failed to add inventory item');
+  }
+  const db = getDb();
+  db.inventory.push(item);
+  saveDb(db);
+  return item;
+}
+
+export async function deleteInventoryItem(id: string): Promise<boolean> {
+  if (isSupabaseConfigured && supabaseAdmin) {
+    const { error } = await supabaseAdmin.from('inventory').delete().eq('id', id);
+    if (!error) return true;
+    console.error('Supabase deleteInventoryItem error:', error);
+    throw new Error(error.message || 'Failed to delete inventory item');
+  }
+  const db = getDb();
+  db.inventory = db.inventory.filter(i => i.id !== id);
+  saveDb(db);
+  return true;
 }
 
 export async function applyRestock(
