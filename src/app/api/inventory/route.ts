@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '../../../lib/db';
+import { getInventoryData } from '../../../lib/supabaseDb';
 
 export async function GET() {
-  const db = getDb();
+  const { inventory, restocks, usageLogs } = await getInventoryData();
   return NextResponse.json({
     success: true,
-    inventory: db.inventory,
-    restocks: db.restocks,
-    usageLogs: db.usageLogs
+    inventory,
+    restocks,
+    usageLogs
   });
 }

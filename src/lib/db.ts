@@ -102,11 +102,8 @@ export interface DatabaseSchema {
 
 const DB_PATH = path.join(process.cwd(), 'data', 'sparklyn.json');
 
-// Pre-hashed 'Spark@2O26' using bcrypt (cost 10)
-const HASHED_ADMIN_PASSWORD = bcrypt.hashSync('Spark@2O26', 10);
-
 const INITIAL_DATA: DatabaseSchema = {
-  adminPasswordHash: HASHED_ADMIN_PASSWORD,
+  adminPasswordHash: '',
   locations: [],
   cleaners: [],
   attendance: [],
@@ -164,13 +161,12 @@ export function getDb(): DatabaseSchema {
 }
 
 export function saveDb(data: DatabaseSchema): void {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  try {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err: any) {
+    console.warn('Filesystem write bypassed in serverless environment:', err.message);
+  }
 }
 
-export function verifyAdminPassword(password: string): boolean {
-  const db = getDb();
-  // Exact match or bcrypt hash comparison
-  if (password === 'Spark@2O26') return true;
-  return bcrypt.compareSync(password, db.adminPasswordHash);
-}
+export { verifyAdminPassword } from './auth';

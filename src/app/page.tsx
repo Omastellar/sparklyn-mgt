@@ -19,7 +19,8 @@ import {
   User,
   Phone,
   Building,
-  RotateCcw
+  RotateCcw,
+  LogOut
 } from 'lucide-react';
 
 interface RoutineTask {
@@ -56,12 +57,15 @@ interface AttendanceRecord {
 
 interface RoutineLog {
   id: string;
+  cleanerId?: string;
   cleanerName: string;
+  locationId?: string;
   locationName: string;
   taskTitle: string;
   frequency: string;
   cycleNumber: number;
   completedAt: string;
+  checklist?: { item?: string; text?: string; done: boolean }[];
   beforePhotoUrl?: string;
   afterPhotoUrl?: string;
 }
@@ -92,6 +96,7 @@ export default function SparklynApp() {
   const [cleanerScreen, setCleanerScreen] = useState<'login' | 'clockin' | 'hub' | 'checklist' | 'inventory'>('login');
   const [adminTab, setAdminTab] = useState<'locations' | 'cleaners' | 'attendance' | 'proofs' | 'inventory'>('locations');
   const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminToken, setAdminToken] = useState('');
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [adminError, setAdminError] = useState('');
 
@@ -107,18 +112,13 @@ export default function SparklynApp() {
   const [phoneInput, setPhoneInput] = useState('');
   const [currentCleaner, setCurrentCleaner] = useState<Cleaner | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
-  const [activeTask, setActiveTask] = useState<{ title: string; freq: string }>({ title: 'Mgt Toilet Sanitization', freq: 'Every 2 Hours' });
+  const [activeTask, setActiveTask] = useState<{ title: string; freq: string }>({ title: '', freq: '' });
   const [selfieImage, setSelfieImage] = useState<string | null>(null);
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [clockInDone, setClockInDone] = useState(false);
 
   // Routine Checklist State
-  const [checklist, setChecklist] = useState([
-    { text: 'Sanitize toilet bowl, seat, and handle', done: true },
-    { text: 'Wipe and dry mirror & counter surfaces', done: true },
-    { text: 'Check and refill soap and paper towel', done: false },
-    { text: 'Damp mop floor with fresh disinfectant', done: false }
-  ]);
+  const [checklist, setChecklist] = useState<{ text: string; done: boolean }[]>([]);
   const [beforePhoto, setBeforePhoto] = useState<string | null>(null);
   const [afterPhoto, setAfterPhoto] = useState<string | null>(null);
 
@@ -132,7 +132,7 @@ export default function SparklynApp() {
   const [locName, setLocName] = useState('');
   const [locAddress, setLocAddress] = useState('');
   const [locTasks, setLocTasks] = useState<{ name: string; frequency: string }[]>([
-    { name: 'Mgt Toilet Sanitization', frequency: 'Every 2 Hours' }
+    { name: '', frequency: 'Every 2 Hours' }
   ]);
 
   const [showCleanerModal, setShowCleanerModal] = useState(false);
@@ -147,6 +147,9 @@ export default function SparklynApp() {
   const [restockNotes, setRestockNotes] = useState('');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const selfieInputRef = useRef<HTMLInputElement | null>(null);
+  const beforeInputRef = useRef<HTMLInputElement | null>(null);
+  const afterInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load Initial Data
   const refreshData = async () => {
@@ -172,6 +175,7 @@ export default function SparklynApp() {
 
   useEffect(() => {
     refreshData();
+    checkAdminAuth();
   }, []);
 
   // Handle Cleaner Login by Phone Number
@@ -193,17 +197,19 @@ export default function SparklynApp() {
       setCleanerScreen('clockin');
 
       // Attempt live GPS coordinate capture
-      if (navigator.geolocation) {
+      if (typeof window !== 'undefined' && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           pos => {
             setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
           },
-          () => {
-            setGpsCoords({ lat: 6.5244, lng: 3.3792 });
-          }
+          err => {
+            console.warn('Geolocation unavailable:', err.message);
+            setGpsCoords(null);
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
         );
       } else {
-        setGpsCoords({ lat: 6.5244, lng: 3.3792 });
+        setGpsCoords(null);
       }
 
       // Initialize camera
@@ -215,23 +221,61 @@ export default function SparklynApp() {
 
   const startCamera = async () => {
     try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      if (typeof window !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
       }
     } catch (e) {
-      console.warn('Camera stream fallback');
+      console.warn('Live camera stream not supported or denied; file capture fallback available');
     }
   };
 
   const takeSelfie = () => {
-    setSelfieImage('https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=500&h=400&fit=crop&crop=faces');
+    if (videoRef.current && videoRef.current.videoWidth > 0) {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        setSelfieImage(dataUrl);
+        // Stop stream tracks to free camera hardware
+        if (video.srcObject) {
+          const stream = video.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+        }
+        return;
+      }
+    }
+    // Fallback if live video stream has no frame: trigger native file camera capture
+    if (selfieInputRef.current) {
+      selfieInputRef.current.click();
+    }
+  };
+
+  const handleSelfieFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setSelfieImage(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const confirmClockIn = async () => {
-    const selfie = selfieImage || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=500&h=400&fit=crop&crop=faces';
+    if (!selfieImage) {
+      alert('Live selfie capture is required to clock in.');
+      return;
+    }
     try {
       await fetch('/api/attendance', {
         method: 'POST',
@@ -241,10 +285,10 @@ export default function SparklynApp() {
           cleanerName: currentCleaner?.name,
           locationId: currentLocation?.id,
           locationName: currentLocation?.name,
-          selfieUrl: selfie,
-          latitude: gpsCoords?.lat || 6.5244,
-          longitude: gpsCoords?.lng || 3.3792,
-          accuracyMeters: 5
+          selfieUrl: selfieImage,
+          latitude: gpsCoords?.lat || 0,
+          longitude: gpsCoords?.lng || 0,
+          accuracyMeters: gpsCoords ? 5 : 0
         })
       });
       setClockInDone(true);
@@ -258,8 +302,8 @@ export default function SparklynApp() {
   const startRoutine = (taskName: string, freq: string) => {
     setActiveTask({ title: taskName, freq });
     setChecklist([
-      { text: `Disinfect & scrub ${taskName.toLowerCase()} high-touch surfaces`, done: true },
-      { text: 'Sanitize handles, faucets, and switches', done: true },
+      { text: `Disinfect & scrub ${taskName.toLowerCase()} high-touch surfaces`, done: false },
+      { text: 'Sanitize handles, faucets, and switches', done: false },
       { text: 'Verify consumables & paper supply', done: false },
       { text: 'Damp mop & dry floor with disinfectant', done: false }
     ]);
@@ -274,16 +318,34 @@ export default function SparklynApp() {
     setChecklist(next);
   };
 
-  const mockSnap = (type: 'before' | 'after') => {
-    if (type === 'before') {
-      setBeforePhoto('https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=400&h=400&fit=crop');
-    } else {
-      setAfterPhoto('https://images.unsplash.com/photo-1585421514738-01798e348b17?w=400&h=400&fit=crop');
-    }
+  const handleProofPhotoCapture = (type: 'before' | 'after', e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        if (type === 'before') {
+          setBeforePhoto(reader.result);
+        } else {
+          setAfterPhoto(reader.result);
+        }
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const submitRoutineAndGoToInventory = async () => {
+    if (!beforePhoto || !afterPhoto) {
+      alert('Please capture both Before and After clean photo proofs to proceed.');
+      return;
+    }
     try {
+      const todayRoutines = routines.filter(
+        r => ((r.cleanerId && currentCleaner?.id) ? r.cleanerId === currentCleaner.id : r.cleanerName === currentCleaner?.name) &&
+             new Date(r.completedAt).toDateString() === new Date().toDateString()
+      );
+      const cycleNumber = todayRoutines.length + 1;
+
       await fetch('/api/routines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -294,10 +356,10 @@ export default function SparklynApp() {
           locationName: currentLocation?.name,
           taskTitle: activeTask.title,
           frequency: activeTask.freq,
-          cycleNumber: 2,
+          cycleNumber,
           checklist,
-          beforePhotoUrl: beforePhoto || 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=400&h=400&fit=crop',
-          afterPhotoUrl: afterPhoto || 'https://images.unsplash.com/photo-1585421514738-01798e348b17?w=400&h=400&fit=crop'
+          beforePhotoUrl: beforePhoto,
+          afterPhotoUrl: afterPhoto
         })
       });
       // Pre-fill inventory counters with standard
@@ -358,7 +420,34 @@ export default function SparklynApp() {
     }
   };
 
-  // Admin Login with Spark@2O26
+  // Admin Session Verification
+  const checkAdminAuth = async () => {
+    try {
+      const stored = typeof window !== 'undefined' ? sessionStorage.getItem('sparklyn_admin_token') : null;
+      const res = await fetch('/api/admin-auth', {
+        headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+      });
+      const data = await res.json();
+      if (data.authenticated) {
+        setAdminUnlocked(true);
+        if (stored) setAdminToken(stored);
+      }
+    } catch {
+      // Ignore background check failure
+    }
+  };
+
+  const getAuthHeaders = (): { [key: string]: string } => {
+    const headers: { [key: string]: string } = { 'Content-Type': 'application/json' };
+    const token =
+      adminToken ||
+      (typeof window !== 'undefined' ? sessionStorage.getItem('sparklyn_admin_token') || '' : '');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  };
+
   const unlockAdmin = async () => {
     try {
       const res = await fetch('/api/admin-auth', {
@@ -369,12 +458,36 @@ export default function SparklynApp() {
       const data = await res.json();
       if (data.success) {
         setAdminUnlocked(true);
+        if (data.token) {
+          setAdminToken(data.token);
+          try {
+            sessionStorage.setItem('sparklyn_admin_token', data.token);
+          } catch {}
+        }
         setAdminError('');
+        setAdminPasswordInput('');
       } else {
-        setAdminError(data.error || 'Invalid admin password');
+        setAdminError(data.error || 'Invalid admin credentials');
       }
     } catch (e) {
       setAdminError('Authentication error');
+    }
+  };
+
+  const logoutAdmin = async () => {
+    try {
+      await fetch('/api/admin-auth', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ action: 'logout' })
+      });
+    } finally {
+      setAdminUnlocked(false);
+      setAdminToken('');
+      try {
+        sessionStorage.removeItem('sparklyn_admin_token');
+      } catch {}
+      setAdminPasswordInput('');
     }
   };
 
@@ -383,7 +496,7 @@ export default function SparklynApp() {
     setEditLocId(null);
     setLocName('');
     setLocAddress('');
-    setLocTasks([{ name: 'Mgt Toilet Sanitization', frequency: 'Every 2 Hours' }]);
+    setLocTasks([{ name: '', frequency: 'Every 2 Hours' }]);
     setShowLocationModal(true);
   };
 
@@ -391,7 +504,7 @@ export default function SparklynApp() {
     setEditLocId(loc.id);
     setLocName(loc.name);
     setLocAddress(loc.address);
-    setLocTasks(loc.tasks && loc.tasks.length ? loc.tasks : [{ name: 'Mgt Toilet Sanitization', frequency: 'Every 2 Hours' }]);
+    setLocTasks(loc.tasks && loc.tasks.length ? loc.tasks : [{ name: '', frequency: 'Every 2 Hours' }]);
     setShowLocationModal(true);
   };
 
@@ -422,10 +535,11 @@ export default function SparklynApp() {
     }
 
     try {
+      let res: Response;
       if (editLocId) {
-        await fetch('/api/locations', {
+        res = await fetch('/api/locations', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             id: editLocId,
             name: locName,
@@ -434,9 +548,9 @@ export default function SparklynApp() {
           })
         });
       } else {
-        await fetch('/api/locations', {
+        res = await fetch('/api/locations', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             name: locName,
             address: locAddress,
@@ -444,10 +558,15 @@ export default function SparklynApp() {
           })
         });
       }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to save location');
+        return;
+      }
       setShowLocationModal(false);
       refreshData();
-    } catch (e) {
-      alert('Failed to save location');
+    } catch (e: any) {
+      alert(e.message || 'Failed to save location');
     }
   };
 
@@ -460,7 +579,7 @@ export default function SparklynApp() {
     try {
       const res = await fetch('/api/cleaners', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           name: newCleanerName,
           phone: newCleanerPhone,
@@ -469,7 +588,7 @@ export default function SparklynApp() {
         })
       });
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok || !data.success) {
         alert(data.error || 'Failed to onboard cleaner');
         return;
       }
@@ -479,8 +598,8 @@ export default function SparklynApp() {
       setNewCleanerAddress('');
       refreshData();
       alert(`Cleaner ${newCleanerName} onboarded successfully!`);
-    } catch (e) {
-      alert('Error onboarding cleaner');
+    } catch (e: any) {
+      alert(e.message || 'Error onboarding cleaner');
     }
   };
 
@@ -492,9 +611,9 @@ export default function SparklynApp() {
       return;
     }
     try {
-      await fetch('/api/restock', {
+      const res = await fetch('/api/restock', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           itemId: targetItemId,
           quantityAdded: restockQty,
@@ -502,11 +621,16 @@ export default function SparklynApp() {
           notes: restockNotes || 'Restocked Batch'
         })
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to process restock');
+        return;
+      }
       setShowRestockModal(false);
       refreshData();
       alert(`Restocked +${restockQty} units!`);
-    } catch (e) {
-      alert('Error logging restock');
+    } catch (e: any) {
+      alert(e.message || 'Error logging restock');
     }
   };
 
@@ -614,26 +738,46 @@ export default function SparklynApp() {
 
                 {/* Camera Viewfinder */}
                 <div className="relative bg-zinc-900 rounded-2xl border border-zinc-800 overflow-hidden aspect-[4/3] flex flex-col items-center justify-center">
+                  <input
+                    type="file"
+                    ref={selfieInputRef}
+                    accept="image/*"
+                    capture="user"
+                    className="hidden"
+                    onChange={handleSelfieFileUpload}
+                  />
+
                   {selfieImage ? (
                     <img src={selfieImage} className="w-full h-full object-cover" alt="Captured selfie" />
                   ) : (
-                    <div className="text-center p-4 space-y-2">
-                      <Camera className="w-10 h-10 text-zinc-400 mx-auto" />
-                      <p className="text-xs font-medium text-zinc-300">Live Camera Selfie Required</p>
-                      <p className="text-[11px] text-zinc-500">Direct camera stream prevents spoofing</p>
-                      <button
-                        onClick={takeSelfie}
-                        className="mt-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700"
-                      >
-                        Snap Live Selfie
-                      </button>
+                    <div className="relative w-full h-full flex flex-col items-center justify-center bg-zinc-950">
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-3 items-center space-y-1.5">
+                        <p className="text-[11px] text-zinc-300 font-medium">Live selfie camera feed</p>
+                        <button
+                          type="button"
+                          onClick={takeSelfie}
+                          className="px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 text-xs font-semibold rounded-full shadow-lg active:scale-95 transition flex items-center gap-1.5"
+                        >
+                          <Camera className="w-3.5 h-3.5" /> Snap Live Selfie
+                        </button>
+                      </div>
                     </div>
                   )}
 
                   {selfieImage && (
                     <button
-                      onClick={() => setSelfieImage(null)}
-                      className="absolute top-2 right-2 px-2 py-1 bg-black/60 backdrop-blur rounded text-[10px] text-zinc-300 flex items-center gap-1"
+                      onClick={() => {
+                        setSelfieImage(null);
+                        startCamera();
+                      }}
+                      className="absolute top-2 right-2 px-2.5 py-1 bg-black/70 backdrop-blur rounded-lg text-[10px] text-zinc-200 hover:text-white flex items-center gap-1 border border-white/10"
                     >
                       <RotateCcw className="w-3 h-3" /> Retake
                     </button>
@@ -644,12 +788,14 @@ export default function SparklynApp() {
                 <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-1 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-400 font-medium flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span> GPS Geotag Lock
+                      <span className={`w-1.5 h-1.5 rounded-full ${gpsCoords ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`}></span> GPS Geotag
                     </span>
-                    <span className="text-[10px] font-semibold text-emerald-400">Within Geofence (35m)</span>
+                    <span className={`text-[10px] font-semibold ${gpsCoords ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {gpsCoords ? 'GPS Fix Locked' : 'Acquiring GPS Signal...'}
+                    </span>
                   </div>
                   <p className="text-[11px] font-mono text-zinc-300">
-                    {gpsCoords ? `${gpsCoords.lat.toFixed(4)}° N, ${gpsCoords.lng.toFixed(4)}° E (±5m)` : 'Acquiring GPS fix...'}
+                    {gpsCoords ? `${gpsCoords.lat.toFixed(4)}° N, ${gpsCoords.lng.toFixed(4)}° E (±5m)` : 'Please ensure device location is enabled'}
                   </p>
                 </div>
 
@@ -678,30 +824,39 @@ export default function SparklynApp() {
                 </div>
 
                 {/* Active Focus Card */}
-                <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Next Scheduled Task</span>
-                      <h3 className="text-base font-bold text-white mt-0.5">
-                        {currentLocation?.tasks[0]?.name || 'Mgt Toilet Sanitization'}
-                      </h3>
-                      <p className="text-xs text-zinc-400">
-                        Configured Interval: <span className="text-zinc-200 font-semibold">{currentLocation?.tasks[0]?.frequency || 'Every 2 Hours'}</span>
-                      </p>
+                {currentLocation?.tasks && currentLocation.tasks.length > 0 ? (
+                  <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Next Scheduled Task</span>
+                        <h3 className="text-base font-bold text-white mt-0.5">
+                          {currentLocation.tasks[0].name}
+                        </h3>
+                        <p className="text-xs text-zinc-400">
+                          Configured Interval: <span className="text-zinc-200 font-semibold">{currentLocation.tasks[0].frequency}</span>
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs font-mono font-bold text-emerald-400">Ready</span>
+                        <p className="text-[10px] text-zinc-500">
+                          Cycle {routines.filter(r => ((r.cleanerId && currentCleaner?.id) ? r.cleanerId === currentCleaner.id : r.cleanerName === currentCleaner?.name) && new Date(r.completedAt).toDateString() === new Date().toDateString()).length + 1}
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-xs font-mono font-bold text-emerald-400">Due Now</span>
-                      <p className="text-[10px] text-zinc-500">Cycle 2</p>
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={() => startRoutine(currentLocation?.tasks[0]?.name || 'Mgt Toilet Sanitization', currentLocation?.tasks[0]?.frequency || 'Every 2 Hours')}
-                    className="w-full py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs transition active:scale-[0.99] flex items-center justify-center gap-1.5"
-                  >
-                    Start Guided Routine <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                    <button
+                      onClick={() => startRoutine(currentLocation.tasks[0].name, currentLocation.tasks[0].frequency)}
+                      className="w-full py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs transition active:scale-[0.99] flex items-center justify-center gap-1.5"
+                    >
+                      Start Guided Routine <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-2xl text-center space-y-1.5">
+                    <p className="text-xs font-semibold text-white">No tasks configured for this site</p>
+                    <p className="text-[11px] text-zinc-400">Ask your admin to add routine tasks to {currentLocation?.name || 'this location'}.</p>
+                  </div>
+                )}
 
                 {/* Dynamic Task List from Assigned Location */}
                 <div className="space-y-2">
@@ -791,8 +946,16 @@ export default function SparklynApp() {
                     {/* Before Card */}
                     <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
                       <span className="text-[11px] font-medium text-zinc-300">Before Clean</span>
+                      <input
+                        type="file"
+                        ref={beforeInputRef}
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={e => handleProofPhotoCapture('before', e)}
+                      />
                       <div
-                        onClick={() => mockSnap('before')}
+                        onClick={() => beforeInputRef.current?.click()}
                         className="aspect-square bg-zinc-950 rounded-lg border border-dashed border-zinc-700 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-500 overflow-hidden"
                       >
                         {beforePhoto ? (
@@ -809,8 +972,16 @@ export default function SparklynApp() {
                     {/* After Card */}
                     <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
                       <span className="text-[11px] font-medium text-emerald-400">After Clean Proof</span>
+                      <input
+                        type="file"
+                        ref={afterInputRef}
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={e => handleProofPhotoCapture('after', e)}
+                      />
                       <div
-                        onClick={() => mockSnap('after')}
+                        onClick={() => afterInputRef.current?.click()}
                         className="aspect-square bg-zinc-950 rounded-lg border border-dashed border-zinc-700 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-500 overflow-hidden"
                       >
                         {afterPhoto ? (
@@ -922,14 +1093,13 @@ export default function SparklynApp() {
                     <label className="block text-xs font-medium text-zinc-400 mb-1.5">Master Password</label>
                     <input
                       type="password"
+                      autoComplete="new-password"
+                      name="sparklyn-admin-pass"
                       value={adminPasswordInput}
                       onChange={e => setAdminPasswordInput(e.target.value)}
-                      placeholder="Password..."
+                      placeholder="Enter master password..."
                       className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400 font-mono transition"
                     />
-                    <p className="text-[11px] text-zinc-500 mt-1">
-                      Password preset: <code className="text-zinc-300">Spark@2O26</code> (Letter O)
-                    </p>
                   </div>
 
                   {adminError && (
@@ -993,6 +1163,14 @@ export default function SparklynApp() {
                     }`}
                   >
                     Inventory & Abuse
+                  </button>
+
+                  <button
+                    onClick={logoutAdmin}
+                    title="Lock admin session"
+                    className="ml-auto px-2.5 py-1.5 rounded-lg flex-shrink-0 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 border border-zinc-800 hover:border-rose-500/30 transition flex items-center gap-1"
+                  >
+                    <LogOut className="w-3 h-3" /> Lock
                   </button>
                 </div>
 

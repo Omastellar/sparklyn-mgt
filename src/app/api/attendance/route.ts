@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getDb, saveDb, AttendanceRecord } from '../../../lib/db';
+import { getAttendance, addAttendance } from '../../../lib/supabaseDb';
+import { AttendanceRecord } from '../../../lib/db';
 
 export async function GET() {
-  const db = getDb();
-  return NextResponse.json({ success: true, attendance: db.attendance });
+  const attendance = await getAttendance();
+  return NextResponse.json({ success: true, attendance });
 }
 
 export async function POST(req: Request) {
@@ -12,7 +13,6 @@ export async function POST(req: Request) {
     if (!cleanerId || !selfieUrl) {
       return NextResponse.json({ success: false, error: 'Cleaner ID and Live Selfie are required' }, { status: 400 });
     }
-    const db = getDb();
     const newRecord: AttendanceRecord = {
       id: 'att-' + Date.now(),
       cleanerId,
@@ -26,9 +26,8 @@ export async function POST(req: Request) {
       accuracyMeters: Number(accuracyMeters) || 5,
       isWithinGeofence: true
     };
-    db.attendance.unshift(newRecord);
-    saveDb(db);
-    return NextResponse.json({ success: true, record: newRecord });
+    const saved = await addAttendance(newRecord);
+    return NextResponse.json({ success: true, record: saved });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

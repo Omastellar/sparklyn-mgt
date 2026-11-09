@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getDb, saveDb, RoutineLog } from '../../../lib/db';
+import { getRoutines, addRoutine } from '../../../lib/supabaseDb';
+import { RoutineLog } from '../../../lib/db';
 
 export async function GET() {
-  const db = getDb();
-  return NextResponse.json({ success: true, routines: db.routines });
+  const routines = await getRoutines();
+  return NextResponse.json({ success: true, routines });
 }
 
 export async function POST(req: Request) {
   try {
     const { cleanerId, cleanerName, locationId, locationName, taskTitle, frequency, cycleNumber, checklist, beforePhotoUrl, afterPhotoUrl } = await req.json();
-    const db = getDb();
     const newLog: RoutineLog = {
       id: 'rout-' + Date.now(),
       cleanerId: cleanerId || 'unknown',
@@ -24,9 +24,8 @@ export async function POST(req: Request) {
       beforePhotoUrl,
       afterPhotoUrl
     };
-    db.routines.unshift(newLog);
-    saveDb(db);
-    return NextResponse.json({ success: true, routine: newLog });
+    const saved = await addRoutine(newLog);
+    return NextResponse.json({ success: true, routine: saved });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
-import { getDb, saveDb, Location } from '../../../lib/db';
+import { getLocations, addLocation, updateLocation } from '../../../lib/supabaseDb';
+import { Location } from '../../../lib/db';
+import { isRequestAuthorizedAsAdmin } from '../../../lib/auth';
 
 export async function GET() {
-  const db = getDb();
-  return NextResponse.json({ success: true, locations: db.locations });
+  const locations = await getLocations();
+  return NextResponse.json({ success: true, locations });
 }
 
 export async function POST(req: Request) {
+  if (!isRequestAuthorizedAsAdmin(req)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized: Admin authentication required' }, { status: 401 });
+  }
+
   try {
     const { name, address, tasks } = await req.json();
     if (!name) {
@@ -15,7 +21,6 @@ export async function POST(req: Request) {
     if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
       return NextResponse.json({ success: false, error: 'At least one routine task is required' }, { status: 400 });
     }
-    const db = getDb();
     const newLoc: Location = {
       id: 'loc-' + Date.now(),
       name,
@@ -27,36 +32,41 @@ export async function POST(req: Request) {
         frequency: t.frequency || 'Every 2 Hours'
       }))
     };
-    db.locations.unshift(newLoc);
-    saveDb(db);
-    return NextResponse.json({ success: true, location: newLoc });
+    const saved = await addLocation(newLoc);
+    return NextResponse.json({ success: true, location: saved });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
 export async function PUT(req: Request) {
+  if (!isRequestAuthorizedAsAdmin(req)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized: Admin authentication required' }, { status: 401 });
+  }
+
   try {
     const { id, name, address, tasks } = await req.json();
     if (!id || !name) {
       return NextResponse.json({ success: false, error: 'Location id and name are required' }, { status: 400 });
     }
-    const db = getDb();
-    const idx = db.locations.findIndex(l => l.id === id);
-    if (idx === -1) {
+    const updated = await updateLocation({
+      id,
+      name,
+      address,
+      ...(tasks && Array.isArray(tasks)
+        ? {
+            tasks: tasks.map((t: any, i: number) => ({
+              id: t.id || 't-' + Date.now() + '-' + i,
+              name: t.name,
+              frequency: t.frequency || 'Every 2 Hours'
+            }))
+          }
+        : {})
+    });
+    if (!updated) {
       return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 });
     }
-    db.locations[idx].name = name;
-    if (address !== undefined) db.locations[idx].address = address;
-    if (tasks && Array.isArray(tasks)) {
-      db.locations[idx].tasks = tasks.map((t: any, i: number) => ({
-        id: t.id || 't-' + Date.now() + '-' + i,
-        name: t.name,
-        frequency: t.frequency || 'Every 2 Hours'
-      }));
-    }
-    saveDb(db);
-    return NextResponse.json({ success: true, location: db.locations[idx] });
+    return NextResponse.json({ success: true, location: updated });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
