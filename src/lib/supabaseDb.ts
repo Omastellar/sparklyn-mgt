@@ -1,4 +1,5 @@
 import { supabaseAdmin, isSupabaseConfigured } from './supabase';
+import { matchPhone } from './auth';
 import {
   getDb,
   saveDb,
@@ -105,17 +106,7 @@ export async function addCleaner(cleaner: Cleaner): Promise<Cleaner> {
 
 export async function findCleanerByPhone(phone: string): Promise<Cleaner | null> {
   const cleaners = await getCleaners();
-  const cleanNum = phone.replace(/[^0-9+]/g, '');
-  return (
-    cleaners.find(c => {
-      const cClean = c.phone.replace(/[^0-9+]/g, '');
-      return (
-        cClean === cleanNum ||
-        cClean.endsWith(cleanNum.slice(-10)) ||
-        cleanNum.endsWith(cClean.slice(-10))
-      );
-    }) || null
-  );
+  return cleaners.find(c => matchPhone(phone, c.phone)) || null;
 }
 
 // ---------------- ATTENDANCE ----------------

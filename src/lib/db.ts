@@ -50,7 +50,9 @@ export interface RoutineLog {
   frequency: string;
   cycleNumber: number;
   completedAt: string;
-  checklist: { item: string; done: boolean }[];
+  startedAt?: string;
+  durationMinutes?: number;
+  checklist: { item?: string; text?: string; done: boolean; startedAt?: string }[];
   beforePhotoUrl?: string;
   afterPhotoUrl?: string;
 }

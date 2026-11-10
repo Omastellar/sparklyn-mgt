@@ -171,4 +171,52 @@ export function isRequestAuthorizedAsAdmin(req: Request): boolean {
   return false;
 }
 
+export interface AdminProfile {
+  name: string;
+  phone: string;
+}
+
+export const KNOWN_ADMINS: AdminProfile[] = [
+  { name: 'Oma', phone: '070346532037' },
+  { name: 'Dolapo', phone: '+234 7056361724' },
+  { name: 'Rita', phone: '+234703 712 3931' }
+];
+
+export function normalizePhone(p: string): string {
+  if (!p) return '';
+  let d = p.replace(/\D/g, '');
+  if (d.startsWith('234')) {
+    d = d.slice(3);
+  }
+  while (d.startsWith('0')) {
+    d = d.slice(1);
+  }
+  return d;
+}
+
+export function matchPhone(phoneA: string, phoneB: string): boolean {
+  if (!phoneA || !phoneB) return false;
+  const digitsA = phoneA.replace(/\D/g, '');
+  const digitsB = phoneB.replace(/\D/g, '');
+  if (!digitsA || !digitsB) return false;
+  if (digitsA === digitsB) return true;
+
+  const normA = normalizePhone(phoneA);
+  const normB = normalizePhone(phoneB);
+  if (normA && normB && (normA === normB || normA.endsWith(normB) || normB.endsWith(normA))) {
+    return true;
+  }
+
+  if (digitsA.length >= 10 && digitsB.length >= 10 && digitsA.slice(-10) === digitsB.slice(-10)) {
+    return true;
+  }
+  return digitsA.endsWith(digitsB) || digitsB.endsWith(digitsA);
+}
+
+export function findAdminByPhone(inputPhone: string): AdminProfile | null {
+  if (!inputPhone) return null;
+  const match = KNOWN_ADMINS.find(admin => matchPhone(inputPhone, admin.phone));
+  return match || null;
+}
+
 export { SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS };

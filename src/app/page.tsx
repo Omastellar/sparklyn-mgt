@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { getNigeriaTime, NigeriaTimeInfo } from '../lib/nigeriaTime';
+import { playChimeAlarm, parseFrequencyToMinutes } from '../lib/alarm';
 import {
   Sparkles,
   Camera,
@@ -20,7 +22,13 @@ import {
   Phone,
   Building,
   RotateCcw,
-  LogOut
+  LogOut,
+  Sun,
+  Moon,
+  Bell,
+  BellOff,
+  Volume2,
+  Timer
 } from 'lucide-react';
 
 interface RoutineTask {
@@ -65,7 +73,9 @@ interface RoutineLog {
   frequency: string;
   cycleNumber: number;
   completedAt: string;
-  checklist?: { item?: string; text?: string; done: boolean }[];
+  startedAt?: string;
+  durationMinutes?: number;
+  checklist?: { item?: string; text?: string; done: boolean; startedAt?: string; durationMinutes?: number }[];
   beforePhotoUrl?: string;
   afterPhotoUrl?: string;
 }
@@ -92,13 +102,19 @@ interface CleanerUsageLog {
 
 export default function SparklynApp() {
   // Navigation State
-  const [role, setRole] = useState<'cleaner' | 'admin'>('cleaner');
-  const [cleanerScreen, setCleanerScreen] = useState<'login' | 'clockin' | 'hub' | 'checklist' | 'inventory'>('login');
+  const [role, setRole] = useState<'cleaner' | 'admin' | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [cleanerScreen, setCleanerScreen] = useState<'clockin' | 'hub' | 'checklist' | 'inventory'>('clockin');
   const [adminTab, setAdminTab] = useState<'locations' | 'cleaners' | 'attendance' | 'proofs' | 'inventory'>('locations');
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminToken, setAdminToken] = useState('');
+  const [adminName, setAdminName] = useState('');
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [adminError, setAdminError] = useState('');
+  const [welcomeToast, setWelcomeToast] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showPasswordFallback, setShowPasswordFallback] = useState(false);
 
   // Data from Backend
   const [locations, setLocations] = useState<Location[]>([]);
@@ -116,6 +132,61 @@ export default function SparklynApp() {
   const [selfieImage, setSelfieImage] = useState<string | null>(null);
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [clockInDone, setClockInDone] = useState(false);
+  const [clockOutDone, setClockOutDone] = useState(false);
+  const [clockInTime, setClockInTime] = useState<string | null>(null);
+  const [clockOutTime, setClockOutTime] = useState<string | null>(null);
+  const [attendanceMode, setAttendanceMode] = useState<'in' | 'out'>('in');
+  const [nigeriaTime, setNigeriaTime] = useState<NigeriaTimeInfo>(getNigeriaTime());
+  const [isSubmittingRoutine, setIsSubmittingRoutine] = useState(false);
+  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
+
+  // Helper to persist cleaner session across page refreshes
+  const saveCleanerSession = (updates: Partial<{
+    cleaner: Cleaner | null;
+    location: Location | null;
+    cleanerScreen: 'clockin' | 'hub' | 'checklist' | 'inventory';
+    clockInDone: boolean;
+    clockOutDone: boolean;
+    clockInTime: string | null;
+    clockOutTime: string | null;
+    routineStage: 'before' | 'in_progress';
+    routineStartedAt: string | null;
+    beforePhoto: string | null;
+    afterPhoto: string | null;
+    phone: string;
+    activeTask: { title: string; freq: string };
+    checklist: { text: string; done: boolean }[];
+  }>) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const existing = localStorage.getItem('sparklyn_cleaner_session');
+      const base = existing ? JSON.parse(existing) : {};
+      const merged = { ...base, ...updates };
+      localStorage.setItem('sparklyn_cleaner_session', JSON.stringify(merged));
+    } catch (e) {
+      console.warn('Failed to save cleaner session', e);
+    }
+  };
+
+  // Two-Stage Routine States: Stage 1 Before Clean Inspection -> Stage 2 Cleaning in progress & After Proof
+  const [routineStage, setRoutineStage] = useState<'before' | 'in_progress'>('before');
+  const [routineStartedAt, setRoutineStartedAt] = useState<string | null>(null);
+  const [elapsedCleaningSeconds, setElapsedCleaningSeconds] = useState(0);
+
+  // Routine Alarm & Audio Reminders
+  const [alarmSoundEnabled, setAlarmSoundEnabled] = useState(true);
+  const [alarmModalOpen, setAlarmModalOpen] = useState(false);
+  const [alarmTaskTitle, setAlarmTaskTitle] = useState('');
+  const [alarmTaskFreq, setAlarmTaskFreq] = useState('');
+  const [snoozedUntil, setSnoozedUntil] = useState<number>(0);
+  const [nextDueRoutine, setNextDueRoutine] = useState<{
+    taskName: string;
+    freq: string;
+    dueTime: number;
+    isOverdue: boolean;
+    diffMinutes: number;
+    timeString: string;
+  } | null>(null);
 
   // Routine Checklist State
   const [checklist, setChecklist] = useState<{ text: string; done: boolean }[]>([]);
@@ -187,10 +258,89 @@ export default function SparklynApp() {
     }
   };
 
+  // Keep West Africa / Nigeria Time current
   useEffect(() => {
+    setNigeriaTime(getNigeriaTime());
+    const timer = setInterval(() => {
+      setNigeriaTime(getNigeriaTime());
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Restore session from localStorage on initial page load (prevents logout on refresh)
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const savedCleaner = localStorage.getItem('sparklyn_cleaner_session');
+        if (savedCleaner) {
+          const parsed = JSON.parse(savedCleaner);
+          if (parsed && parsed.cleaner) {
+            setCurrentCleaner(parsed.cleaner);
+            setCurrentLocation(parsed.location || null);
+            const inDone = !!parsed.clockInDone;
+            const outDone = !!parsed.clockOutDone;
+            setClockInDone(inDone);
+            setClockOutDone(outDone);
+            if (parsed.clockInTime) setClockInTime(parsed.clockInTime);
+            if (parsed.clockOutTime) setClockOutTime(parsed.clockOutTime);
+
+            // If cleaner has already clocked in today, never force attendance capture on refresh!
+            const defaultScreen = inDone ? 'hub' : 'clockin';
+            setCleanerScreen(parsed.cleanerScreen || defaultScreen);
+            if (parsed.activeTask) setActiveTask(parsed.activeTask);
+            if (parsed.checklist) setChecklist(parsed.checklist);
+            if (parsed.phone) setPhoneInput(parsed.phone);
+            if (parsed.routineStage) setRoutineStage(parsed.routineStage);
+            if (parsed.routineStartedAt) setRoutineStartedAt(parsed.routineStartedAt);
+            if (parsed.beforePhoto) setBeforePhoto(parsed.beforePhoto);
+            setRole('cleaner');
+            setSessionLoaded(true);
+            refreshData();
+            return;
+          }
+        }
+
+        const savedAdmin = localStorage.getItem('sparklyn_admin_session');
+        if (savedAdmin) {
+          const parsed = JSON.parse(savedAdmin);
+          if (parsed && parsed.token) {
+            setAdminToken(parsed.token);
+            setAdminName(parsed.adminName || 'Admin');
+            setAdminUnlocked(true);
+            setRole('admin');
+            setSessionLoaded(true);
+            refreshData();
+            return;
+          }
+        }
+
+        const legacyToken = sessionStorage.getItem('sparklyn_admin_token');
+        if (legacyToken) {
+          setAdminToken(legacyToken);
+          setAdminUnlocked(true);
+          setRole('admin');
+          setSessionLoaded(true);
+          refreshData();
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not restore local session:', e);
+    }
+    setSessionLoaded(true);
     refreshData();
     checkAdminAuth();
   }, []);
+
+  // Auto-dismiss welcome banner after 7 seconds
+  useEffect(() => {
+    if (welcomeToast) {
+      const timer = setTimeout(() => {
+        setWelcomeToast(null);
+      }, 7000);
+      return () => clearTimeout(timer);
+    }
+  }, [welcomeToast]);
 
   // Poll for updates in Admin view
   useEffect(() => {
@@ -202,9 +352,114 @@ export default function SparklynApp() {
     }
   }, [adminUnlocked, role]);
 
-  // Handle Cleaner Login by Phone Number
-  const handleCleanerLogin = async (overridePhone?: string) => {
-    const p = overridePhone || phoneInput;
+  // Live Cleaning Timer during Active Routine Phase
+  useEffect(() => {
+    if (cleanerScreen === 'checklist' && routineStage === 'in_progress' && routineStartedAt) {
+      const calcElapsed = () => {
+        const startMs = new Date(routineStartedAt).getTime();
+        const diff = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+        setElapsedCleaningSeconds(diff);
+      };
+      calcElapsed();
+      const interval = setInterval(calcElapsed, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [cleanerScreen, routineStage, routineStartedAt]);
+
+  // Routine Cleaning Schedule & Reminder Alarm
+  useEffect(() => {
+    if (role !== 'cleaner' || !currentCleaner || !currentLocation) return;
+
+    const evaluateRoutineAlarm = () => {
+      const tasks = currentLocation.tasks || [];
+      if (tasks.length === 0) {
+        setNextDueRoutine(null);
+        return;
+      }
+
+      const primaryTask = tasks[0];
+      const freqMinutes = parseFrequencyToMinutes(primaryTask.frequency);
+
+      // Find today's routines for this cleaner / location
+      const todayDateStr = new Date().toDateString();
+      const completedToday = routines
+        .filter(r => {
+          const isCleaner = (r.cleanerId && currentCleaner.id) ? r.cleanerId === currentCleaner.id : r.cleanerName === currentCleaner.name;
+          const isToday = new Date(r.completedAt).toDateString() === todayDateStr;
+          return isCleaner && isToday;
+        })
+        .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+
+      const now = Date.now();
+      let baseTime = now;
+
+      if (completedToday.length > 0) {
+        // Next routine is due `freqMinutes` after the last completed routine
+        baseTime = new Date(completedToday[0].completedAt).getTime();
+      } else if (clockInTime) {
+        const parsedClockIn = new Date(clockInTime).getTime();
+        if (!isNaN(parsedClockIn)) {
+          baseTime = parsedClockIn;
+        } else {
+          const d = new Date();
+          const parts = clockInTime.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+          if (parts) {
+            let h = parseInt(parts[1], 10);
+            const m = parseInt(parts[2], 10);
+            const ap = parts[3]?.toUpperCase();
+            if (ap === 'PM' && h < 12) h += 12;
+            if (ap === 'AM' && h === 12) h = 0;
+            d.setHours(h, m, 0, 0);
+            baseTime = d.getTime();
+          }
+        }
+      } else {
+        const d = new Date();
+        d.setHours(8, 0, 0, 0);
+        baseTime = d.getTime();
+      }
+
+      const dueTime = baseTime + (freqMinutes * 60 * 1000);
+      const isOverdue = now >= dueTime;
+      const diffMinutes = Math.round(Math.abs(now - dueTime) / 60000);
+      const dueDate = new Date(dueTime);
+      const timeString = dueDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      setNextDueRoutine({
+        taskName: primaryTask.name,
+        freq: primaryTask.frequency,
+        dueTime,
+        isOverdue,
+        diffMinutes,
+        timeString
+      });
+
+      // Trigger alarm if overdue, not snoozed, on hub, and not already showing
+      if (isOverdue && now > snoozedUntil && cleanerScreen === 'hub' && !alarmModalOpen) {
+        setAlarmTaskTitle(primaryTask.name);
+        setAlarmTaskFreq(primaryTask.frequency);
+        setAlarmModalOpen(true);
+        if (alarmSoundEnabled) {
+          playChimeAlarm();
+        }
+      }
+    };
+
+    evaluateRoutineAlarm();
+    const timer = setInterval(evaluateRoutineAlarm, 15000);
+    return () => clearInterval(timer);
+  }, [role, currentCleaner, currentLocation, routines, clockInTime, snoozedUntil, alarmSoundEnabled, cleanerScreen, alarmModalOpen]);
+
+  // Handle Unified Login by Phone Number
+  // Identifies Admins (Oma, Dolapo, Rita) and Onboarded Cleaners
+  const handlePhoneLogin = async (overridePhone?: string) => {
+    const p = (overridePhone !== undefined ? overridePhone : phoneInput).trim();
+    if (!p) {
+      setLoginError('Please enter your phone number to sign in');
+      return;
+    }
+    setLoginError('');
+    setIsLoggingIn(true);
     try {
       const res = await fetch('/api/cleaner-login', {
         method: 'POST',
@@ -212,35 +467,123 @@ export default function SparklynApp() {
         body: JSON.stringify({ phone: p })
       });
       const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || 'Cleaner phone number not found');
+      if (!res.ok || !data.success) {
+        setLoginError(data.error || 'Phone number not registered. Please contact management.');
         return;
       }
-      setCurrentCleaner(data.cleaner);
-      setCurrentLocation(data.location);
-      setCleanerScreen('clockin');
 
-      // Attempt live GPS coordinate capture
-      if (typeof window !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          pos => {
-            setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          },
-          err => {
-            console.warn('Geolocation unavailable:', err.message);
-            setGpsCoords(null);
-          },
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
-      } else {
-        setGpsCoords(null);
+      // 1. Admin Match (Oma, Dolapo, Rita)
+      if (data.role === 'admin') {
+        setRole('admin');
+        setAdminUnlocked(true);
+        setAdminToken(data.token);
+        const name = data.adminName || 'Admin';
+        setAdminName(name);
+        setWelcomeToast(data.message || `Welcome, Admin ${name}!`);
+
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(
+            'sparklyn_admin_session',
+            JSON.stringify({ token: data.token, adminName: name, phone: p })
+          );
+          sessionStorage.setItem('sparklyn_admin_token', data.token);
+          localStorage.removeItem('sparklyn_cleaner_session');
+        }
+        refreshData();
+        return;
       }
 
-      // Initialize camera
-      startCamera();
+      // 2. Cleaner Match (Prince or any onboarded cleaner)
+      if (data.role === 'cleaner') {
+        setRole('cleaner');
+        setCurrentCleaner(data.cleaner);
+        setCurrentLocation(data.location);
+        const inDone = !!data.clockInDone;
+        const outDone = !!data.clockOutDone;
+        setClockInDone(inDone);
+        setClockOutDone(outDone);
+        if (data.clockInTime) setClockInTime(data.clockInTime);
+        if (data.clockOutTime) setClockOutTime(data.clockOutTime);
+
+        // Attendance is twice a day:
+        // - Morning Clock In
+        // - Evening Clock Out (3:30 PM - 5:00 PM WAT)
+        // If already clocked in, go straight to Hub! Never force attendance capture on login.
+        const targetScreen: 'clockin' | 'hub' = inDone ? 'hub' : 'clockin';
+        setAttendanceMode('in');
+        setCleanerScreen(targetScreen);
+        setWelcomeToast(data.message || `Welcome back, ${data.cleaner.name}!`);
+
+        saveCleanerSession({
+          cleaner: data.cleaner,
+          location: data.location,
+          cleanerScreen: targetScreen,
+          clockInDone: inDone,
+          clockOutDone: outDone,
+          clockInTime: data.clockInTime || null,
+          clockOutTime: data.clockOutTime || null,
+          phone: p
+        });
+
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('sparklyn_admin_session');
+        }
+
+        if (!inDone) {
+          // Attempt live GPS coordinate capture for morning attendance
+          if (typeof window !== 'undefined' && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              pos => {
+                setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+              },
+              err => {
+                console.warn('Geolocation unavailable:', err.message);
+                setGpsCoords(null);
+              },
+              { enableHighAccuracy: true, timeout: 10000 }
+            );
+          } else {
+            setGpsCoords(null);
+          }
+          startCamera();
+        }
+
+        refreshData();
+        return;
+      }
     } catch (e) {
-      alert('Network error signing in');
+      setLoginError('Network connection error. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
     }
+  };
+
+  const handleCleanerLogin = handlePhoneLogin;
+
+  const handleSignOut = async () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('sparklyn_cleaner_session');
+      localStorage.removeItem('sparklyn_admin_session');
+      sessionStorage.removeItem('sparklyn_admin_token');
+    }
+    if (role === 'admin') {
+      try {
+        await fetch('/api/admin-auth', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch {}
+    }
+    setRole(null);
+    setCurrentCleaner(null);
+    setCurrentLocation(null);
+    setClockInDone(false);
+    setAdminUnlocked(false);
+    setAdminToken('');
+    setAdminName('');
+    setWelcomeToast(null);
+    setLoginError('');
   };
 
   const startCamera = async () => {
@@ -326,11 +669,46 @@ export default function SparklynApp() {
     }
   };
 
-  const confirmClockIn = async () => {
-    if (!selfieImage) {
-      alert('Live selfie capture is required to clock in.');
+  const openClockOut = () => {
+    const ng = getNigeriaTime();
+    if (ng.isBeforeClockOut) {
+      alert(`Cleaners cannot clock out before 3:30 PM (Nigeria Time). Current time is ${ng.timeString} WAT.`);
       return;
     }
+    setAttendanceMode('out');
+    setSelfieImage(null);
+    setCleanerScreen('clockin');
+
+    if (typeof window !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        err => {
+          console.warn('Geolocation unavailable:', err.message);
+          setGpsCoords(null);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    } else {
+      setGpsCoords(null);
+    }
+    startCamera();
+  };
+
+  const confirmAttendance = async () => {
+    if (isSubmittingAttendance) return;
+    if (!selfieImage) {
+      alert(`Live selfie capture is required to ${attendanceMode === 'out' ? 'clock out' : 'clock in'}.`);
+      return;
+    }
+    const ng = getNigeriaTime();
+    if (attendanceMode === 'out' && ng.isBeforeClockOut) {
+      alert(`Cleaners cannot clock out before 3:30 PM (Nigeria Time). Current time is ${ng.timeString} WAT.`);
+      return;
+    }
+
+    setIsSubmittingAttendance(true);
     try {
       const res = await fetch('/api/attendance', {
         method: 'POST',
@@ -343,7 +721,8 @@ export default function SparklynApp() {
           selfieUrl: selfieImage,
           latitude: gpsCoords?.lat || 0,
           longitude: gpsCoords?.lng || 0,
-          accuracyMeters: gpsCoords ? 5 : 0
+          accuracyMeters: gpsCoords ? 5 : 0,
+          type: attendanceMode
         })
       });
       const data = await res.json();
@@ -351,31 +730,92 @@ export default function SparklynApp() {
         alert(data.error || 'Failed to record attendance');
         return;
       }
-      setClockInDone(true);
-      setCleanerScreen('hub');
+
+      if (attendanceMode === 'out') {
+        const timeOut = data.record?.timestamp || new Date().toISOString();
+        setClockOutDone(true);
+        setClockOutTime(timeOut);
+        setCleanerScreen('hub');
+        saveCleanerSession({
+          clockOutDone: true,
+          clockOutTime: timeOut,
+          cleanerScreen: 'hub'
+        });
+        alert('Evening shift successfully closed! Great job today.');
+      } else {
+        const timeIn = data.record?.timestamp || new Date().toISOString();
+        setClockInDone(true);
+        setClockInTime(timeIn);
+        setCleanerScreen('hub');
+        saveCleanerSession({
+          clockInDone: true,
+          clockInTime: timeIn,
+          cleanerScreen: 'hub'
+        });
+      }
       refreshData();
     } catch (e: any) {
       alert(e.message || 'Error recording attendance');
+    } finally {
+      setIsSubmittingAttendance(false);
     }
   };
 
+  const confirmClockIn = confirmAttendance;
+
+  const formatElapsedTimer = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const startRoutine = (taskName: string, freq: string) => {
-    setActiveTask({ title: taskName, freq });
-    setChecklist([
+    const checks = [
       { text: `Disinfect & scrub ${taskName.toLowerCase()} high-touch surfaces`, done: false },
       { text: 'Sanitize handles, faucets, and switches', done: false },
       { text: 'Verify consumables & paper supply', done: false },
       { text: 'Damp mop & dry floor with disinfectant', done: false }
-    ]);
+    ];
+    setActiveTask({ title: taskName, freq });
+    setChecklist(checks);
     setBeforePhoto(null);
     setAfterPhoto(null);
+    setRoutineStage('before');
+    setRoutineStartedAt(null);
+    setElapsedCleaningSeconds(0);
+    setAlarmModalOpen(false);
     setCleanerScreen('checklist');
+    saveCleanerSession({
+      cleanerScreen: 'checklist',
+      activeTask: { title: taskName, freq },
+      checklist: checks,
+      routineStage: 'before',
+      routineStartedAt: null,
+      beforePhoto: null
+    });
+  };
+
+  const beginCleaningPhase = () => {
+    if (!beforePhoto) {
+      alert('Please capture the Before Clean proof photo first before starting physical cleaning.');
+      return;
+    }
+    const startedIso = new Date().toISOString();
+    setRoutineStage('in_progress');
+    setRoutineStartedAt(startedIso);
+    setElapsedCleaningSeconds(0);
+    saveCleanerSession({
+      routineStage: 'in_progress',
+      routineStartedAt: startedIso,
+      beforePhoto
+    });
   };
 
   const toggleCheck = (idx: number) => {
     const next = [...checklist];
     next[idx].done = !next[idx].done;
     setChecklist(next);
+    saveCleanerSession({ checklist: next });
   };
 
   const handleProofPhotoCapture = async (type: 'before' | 'after', e: React.ChangeEvent<HTMLInputElement>) => {
@@ -385,6 +825,7 @@ export default function SparklynApp() {
       const compressed = await compressImageFile(file, 1024, 0.75);
       if (type === 'before') {
         setBeforePhoto(compressed);
+        saveCleanerSession({ beforePhoto: compressed });
       } else {
         setAfterPhoto(compressed);
       }
@@ -394,10 +835,12 @@ export default function SparklynApp() {
   };
 
   const submitRoutineAndGoToInventory = async () => {
+    if (isSubmittingRoutine) return;
     if (!beforePhoto || !afterPhoto) {
       alert('Please capture both Before and After clean photo proofs to proceed.');
       return;
     }
+    setIsSubmittingRoutine(true);
     try {
       const todayRoutines = routines.filter(
         r => ((r.cleanerId && currentCleaner?.id) ? r.cleanerId === currentCleaner.id : r.cleanerName === currentCleaner?.name) &&
@@ -418,7 +861,8 @@ export default function SparklynApp() {
           cycleNumber,
           checklist,
           beforePhotoUrl: beforePhoto,
-          afterPhotoUrl: afterPhoto
+          afterPhotoUrl: afterPhoto,
+          startedAt: routineStartedAt || new Date().toISOString()
         })
       });
 
@@ -435,10 +879,23 @@ export default function SparklynApp() {
       });
       setSelectedSupplies(initialSupplies);
       setShowAbuseWarning(false);
+      setBeforePhoto(null);
+      setAfterPhoto(null);
+      setRoutineStartedAt(null);
+      setRoutineStage('before');
+      setElapsedCleaningSeconds(0);
       setCleanerScreen('inventory');
+      saveCleanerSession({
+        cleanerScreen: 'inventory',
+        routineStage: 'before',
+        routineStartedAt: null,
+        beforePhoto: null
+      });
       refreshData();
     } catch (e: any) {
       alert(e.message || 'Error submitting routine');
+    } finally {
+      setIsSubmittingRoutine(false);
     }
   };
 
@@ -480,6 +937,7 @@ export default function SparklynApp() {
       }
       alert('Routine and supply consumption successfully logged!');
       setCleanerScreen('hub');
+      saveCleanerSession({ cleanerScreen: 'hub' });
       refreshData();
     } catch (e) {
       alert('Error saving inventory usage');
@@ -489,14 +947,23 @@ export default function SparklynApp() {
   // Admin Session Verification
   const checkAdminAuth = async () => {
     try {
-      const stored = typeof window !== 'undefined' ? sessionStorage.getItem('sparklyn_admin_token') : null;
+      let storedToken = '';
+      if (typeof window !== 'undefined') {
+        const savedAdmin = localStorage.getItem('sparklyn_admin_session');
+        if (savedAdmin) {
+          try { storedToken = JSON.parse(savedAdmin).token || ''; } catch {}
+        }
+        if (!storedToken) {
+          storedToken = sessionStorage.getItem('sparklyn_admin_token') || '';
+        }
+      }
       const res = await fetch('/api/admin-auth', {
-        headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+        headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {}
       });
       const data = await res.json();
       if (data.authenticated) {
         setAdminUnlocked(true);
-        if (stored) setAdminToken(stored);
+        if (storedToken) setAdminToken(storedToken);
       }
     } catch {
       // Ignore background check failure
@@ -505,9 +972,18 @@ export default function SparklynApp() {
 
   const getAuthHeaders = (): { [key: string]: string } => {
     const headers: { [key: string]: string } = { 'Content-Type': 'application/json' };
-    const token =
-      adminToken ||
-      (typeof window !== 'undefined' ? sessionStorage.getItem('sparklyn_admin_token') || '' : '');
+    let token = adminToken;
+    if (!token && typeof window !== 'undefined') {
+      try {
+        const savedAdmin = localStorage.getItem('sparklyn_admin_session');
+        if (savedAdmin) {
+          token = JSON.parse(savedAdmin).token || '';
+        }
+      } catch {}
+      if (!token) {
+        token = sessionStorage.getItem('sparklyn_admin_token') || '';
+      }
+    }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -523,15 +999,24 @@ export default function SparklynApp() {
       });
       const data = await res.json();
       if (data.success) {
+        setRole('admin');
         setAdminUnlocked(true);
+        setAdminName('Admin');
         if (data.token) {
           setAdminToken(data.token);
           try {
             sessionStorage.setItem('sparklyn_admin_token', data.token);
+            localStorage.setItem(
+              'sparklyn_admin_session',
+              JSON.stringify({ token: data.token, adminName: 'Admin' })
+            );
+            localStorage.removeItem('sparklyn_cleaner_session');
           } catch {}
         }
+        setWelcomeToast('Welcome, Admin!');
         setAdminError('');
         setAdminPasswordInput('');
+        setShowPasswordFallback(false);
         refreshData();
       } else {
         setAdminError(data.error || 'Invalid admin credentials');
@@ -549,12 +1034,7 @@ export default function SparklynApp() {
         body: JSON.stringify({ action: 'logout' })
       });
     } finally {
-      setAdminUnlocked(false);
-      setAdminToken('');
-      try {
-        sessionStorage.removeItem('sparklyn_admin_token');
-      } catch {}
-      setAdminPasswordInput('');
+      handleSignOut();
     }
   };
 
@@ -766,35 +1246,167 @@ export default function SparklynApp() {
             <div>
               <h1 className="text-sm font-bold tracking-tight text-white leading-none">Sparklyn</h1>
               <p className="text-[11px] text-zinc-400 mt-0.5 leading-none">
-                {role === 'cleaner' ? 'Cleaner Routine App' : 'Admin Operations Hub'}
+                {role === 'cleaner'
+                  ? (currentCleaner ? `${currentCleaner.name} · ${currentLocation?.name || 'Assigned Site'}` : 'Cleaner Operations')
+                  : role === 'admin'
+                  ? (adminName ? `Admin ${adminName} · Operations Hub` : 'Admin Operations Hub')
+                  : 'Facility Operations Portal'}
               </p>
             </div>
           </div>
 
-          {/* Role Toggle Button */}
-          <div className="flex items-center bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-xs">
-            <button
-              onClick={() => setRole('cleaner')}
-              className={`px-2.5 py-1 rounded-md transition font-semibold ${
-                role === 'cleaner' ? 'bg-zinc-100 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Cleaner
-            </button>
-            <button
-              onClick={() => setRole('admin')}
-              className={`px-2.5 py-1 rounded-md transition font-medium ${
-                role === 'admin' ? 'bg-zinc-100 text-zinc-950 shadow-sm font-semibold' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Admin
-            </button>
-          </div>
+          {/* Right Action */}
+          {role && (
+            <div className="flex items-center gap-2">
+              {role === 'admin' && (
+                <button
+                  onClick={refreshData}
+                  title="Refresh data"
+                  className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+              <button
+                onClick={handleSignOut}
+                title="Sign out of current shift or session"
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 border border-zinc-800 hover:border-rose-500/30 transition flex items-center gap-1.5"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
+      {/* WELCOME BANNER / TOAST */}
+      {welcomeToast && (
+        <div className="mx-4 mt-3 p-3 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs text-emerald-200 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2 font-medium">
+            <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <span>{welcomeToast}</span>
+          </div>
+          <button
+            onClick={() => setWelcomeToast(null)}
+            className="text-zinc-400 hover:text-white text-xs px-1.5 py-0.5"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* BODY CONTENT */}
       <main className="flex-1 p-4 pb-20 space-y-4">
+
+        {/* ======================================================== */}
+        {/* 0. UNIFIED PHONE LOGIN SCREEN (PROMPT ON LOAD)           */}
+        {/* ======================================================== */}
+        {!role && sessionLoaded && (
+          <div className="space-y-6 pt-6 pb-8">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-zinc-100 text-zinc-950 font-black flex items-center justify-center text-2xl tracking-tight shadow-lg">
+                S
+              </div>
+              <h2 className="text-xl font-bold tracking-tight text-white pt-1">Welcome to Sparklyn</h2>
+              <p className="text-xs text-zinc-400 max-w-xs mx-auto">
+                Enter your mobile number. The system will automatically identify you as Admin or Cleaner.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-5 space-y-4 shadow-xl">
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  handlePhoneLogin();
+                }}
+                className="space-y-3.5"
+              >
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1.5">
+                    Phone Number
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-500">
+                      <Phone className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="tel"
+                      value={phoneInput}
+                      onChange={e => {
+                        setPhoneInput(e.target.value);
+                        setLoginError('');
+                      }}
+                      placeholder="e.g. 070346532037 or +234..."
+                      className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-300 font-mono transition"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                {loginError && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+                    <span>{loginError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99] flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {isLoggingIn ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Verifying Account...
+                    </>
+                  ) : (
+                    <>
+                      Sign In <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {/* Password fallback option for Admin */}
+              <div className="pt-2 border-t border-zinc-800/60 text-center">
+                {!showPasswordFallback ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordFallback(true)}
+                    className="text-[11px] text-zinc-500 hover:text-zinc-300 transition"
+                  >
+                    Have a master password? Sign in with password
+                  </button>
+                ) : (
+                  <div className="space-y-2.5 pt-2 text-left">
+                    <label className="block text-xs font-medium text-zinc-400">Master Admin Password</label>
+                    <input
+                      type="password"
+                      value={adminPasswordInput}
+                      onChange={e => {
+                        setAdminPasswordInput(e.target.value);
+                        setAdminError('');
+                      }}
+                      placeholder="Enter master password..."
+                      className="w-full px-3.5 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-300 font-mono"
+                    />
+                    {adminError && (
+                      <p className="text-[11px] text-rose-400 font-medium">{adminError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={unlockAdmin}
+                      className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                    >
+                      <Lock className="w-3 h-3" /> Unlock Admin Hub
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ======================================================== */}
         {/* 1. CLEANER MOBILE INTERFACE                              */}
@@ -802,47 +1414,44 @@ export default function SparklynApp() {
         {role === 'cleaner' && (
           <div className="space-y-4">
 
-            {/* SCREEN 1: PHONE NUMBER LOGIN */}
-            {cleanerScreen === 'login' && (
-              <div className="space-y-4 pt-4">
-                <div>
-                  <h2 className="text-xl font-bold tracking-tight text-white">Sign in to your shift</h2>
-                  <p className="text-xs text-zinc-400 mt-1">Enter your registered mobile phone number collected by Admin</p>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">Registered Phone Number</label>
-                    <input
-                      type="tel"
-                      value={phoneInput}
-                      onChange={e => setPhoneInput(e.target.value)}
-                      placeholder="e.g. +234..."
-                      className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400 font-mono transition"
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => handleCleanerLogin()}
-                    className="w-full mt-2 py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99] flex items-center justify-center gap-1.5"
-                  >
-                    Verify & Continue <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* SCREEN 2: MORNING LIVE SELFIE & GPS CLOCK-IN */}
+            {/* SCREEN 2: MORNING ATTENDANCE OR EVENING CLOCK-OUT */}
             {cleanerScreen === 'clockin' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-lg font-bold text-white">Morning Attendance</h2>
-                    <p className="text-xs text-zinc-400">Live selfie & GPS location verification</p>
+                    <h2 className="text-lg font-bold text-white flex items-center gap-1.5">
+                      {attendanceMode === 'out' ? (
+                        <>
+                          <Moon className="w-5 h-5 text-amber-400" /> Evening Clock-Out
+                        </>
+                      ) : (
+                        <>
+                          <Sun className="w-5 h-5 text-emerald-400" /> Morning Attendance
+                        </>
+                      )}
+                    </h2>
+                    <p className="text-xs text-zinc-400">
+                      {attendanceMode === 'out'
+                        ? 'Closing shift selfie & GPS geotag verification'
+                        : 'Live selfie & GPS location verification'}
+                    </p>
                   </div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                    Step 1
-                  </span>
+                  {attendanceMode === 'out' ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCleanerScreen('hub');
+                        saveCleanerSession({ cleanerScreen: 'hub' });
+                      }}
+                      className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                      Clock-In
+                    </span>
+                  )}
                 </div>
 
                 <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl flex items-center justify-between">
@@ -851,7 +1460,7 @@ export default function SparklynApp() {
                     <p className="text-[11px] text-zinc-400">📍 {currentLocation?.name || 'Assigned Facility'}</p>
                   </div>
                   <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                    Ready
+                    {attendanceMode === 'out' ? 'Closing Shift' : 'Arrival Check'}
                   </span>
                 </div>
 
@@ -919,10 +1528,23 @@ export default function SparklynApp() {
                 </div>
 
                 <button
-                  onClick={confirmClockIn}
-                  className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99]"
+                  onClick={confirmAttendance}
+                  disabled={isSubmittingAttendance}
+                  className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  Confirm Attendance & View Routine
+                  {isSubmittingAttendance ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Recording Attendance...
+                    </>
+                  ) : attendanceMode === 'out' ? (
+                    <>
+                      Confirm Evening Clock-Out & Close Shift ✓
+                    </>
+                  ) : (
+                    <>
+                      Confirm Morning Attendance & View Routines <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
                 </button>
               </div>
             )}
@@ -937,10 +1559,178 @@ export default function SparklynApp() {
                       Cleaner: <span className="text-zinc-200 font-medium">{currentCleaner?.name}</span>
                     </p>
                   </div>
-                  <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                    Clocked In
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
+                    clockOutDone
+                      ? 'text-violet-400 bg-violet-500/10 border-violet-500/20'
+                      : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                  }`}>
+                    {clockOutDone ? 'Shift Completed' : 'Shift Active'}
                   </span>
                 </div>
+
+                {/* SHIFT ATTENDANCE & NIGERIA TIME CARD */}
+                <div className="p-3.5 bg-zinc-900/70 border border-zinc-800 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between text-xs pb-2 border-b border-zinc-800/60">
+                    <div className="flex items-center gap-1.5 text-zinc-300 font-medium">
+                      <Clock className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Nigeria Time:</span>
+                      <span className="font-mono text-white font-semibold">{nigeriaTime.timeString} WAT</span>
+                    </div>
+                    <span className="text-[10px] text-zinc-400">2 Checks / Day</span>
+                  </div>
+
+                  {/* Morning Clock-In Status */}
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <Sun className="w-4 h-4 text-emerald-400" />
+                      <div>
+                        <p className="font-medium text-white">Morning Clock-In</p>
+                        <p className="text-[10px] text-zinc-400">
+                          {clockInTime
+                            ? `Logged at ${new Date(clockInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WAT`
+                            : 'Verified on arrival'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Clocked In
+                    </span>
+                  </div>
+
+                  {/* Evening Clock-Out Status (3:30 PM - 5:00 PM WAT) */}
+                  <div className="pt-2 border-t border-zinc-800/60">
+                    {clockOutDone ? (
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <Moon className="w-4 h-4 text-violet-400" />
+                          <div>
+                            <p className="font-medium text-white">Evening Clock-Out</p>
+                            <p className="text-[10px] text-zinc-400">
+                              {clockOutTime
+                                ? `Completed at ${new Date(clockOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WAT`
+                                : 'Shift officially closed'}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Shift Complete
+                        </span>
+                      </div>
+                    ) : nigeriaTime.isBeforeClockOut ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <Moon className="w-4 h-4 text-amber-400" />
+                            <div>
+                              <p className="font-medium text-white">Evening Clock-Out</p>
+                              <p className="text-[10px] text-zinc-400">
+                                Window: 3:30 PM – 5:00 PM WAT
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-mono text-zinc-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-zinc-500" /> Unlocks 3:30 PM
+                          </span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800/60 text-[11px] text-zinc-400 flex items-center gap-2">
+                          <Lock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                          <span>Cleaners cannot clock out before 3:30 PM. Keep executing your scheduled routine cycles.</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <Moon className="w-4 h-4 text-emerald-400" />
+                            <div>
+                              <p className="font-medium text-white">Evening Clock-Out Window Open</p>
+                              <p className="text-[10px] text-emerald-400">
+                                3:30 PM – 5:00 PM WAT
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-pulse">
+                            Ready to Clock Out
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openClockOut}
+                          className="w-full py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs transition active:scale-[0.99] flex items-center justify-center gap-1.5 shadow-sm"
+                        >
+                          <Camera className="w-3.5 h-3.5" /> Clock Out for Today (Evening Selfie & GPS)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ROUTINE CLEANING SCHEDULE & ALARM STATUS CARD */}
+                {nextDueRoutine?.isOverdue ? (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center relative flex-shrink-0">
+                        <span className="absolute inset-0 rounded-xl bg-amber-400/30 animate-ping opacity-60" />
+                        <Bell className="w-4 h-4 text-amber-400 animate-bounce relative z-10" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                            Routine Due Now
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-white">
+                          {nextDueRoutine.taskName}
+                        </p>
+                        <p className="text-[10px] text-amber-300/80">
+                          Overdue by {nextDueRoutine.diffMinutes} mins • {nextDueRoutine.freq}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => startRoutine(nextDueRoutine.taskName, nextDueRoutine.freq)}
+                      className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-bold rounded-xl text-xs transition active:scale-[0.98] shadow-sm flex items-center gap-1 flex-shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" /> Clean Now
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-400">
+                        <Timer className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-white">Next Scheduled Routine</p>
+                        <p className="text-[10px] text-zinc-400">
+                          {nextDueRoutine
+                            ? `${nextDueRoutine.taskName} at ${nextDueRoutine.timeString} (in ${nextDueRoutine.diffMinutes}m)`
+                            : (currentLocation?.tasks?.[0]?.name ? `${currentLocation.tasks[0].name} (${currentLocation.tasks[0].frequency})` : 'Routine scheduled')}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        title={alarmSoundEnabled ? "Alarm audio chime on" : "Alarm audio chime muted"}
+                        onClick={() => {
+                          const nextState = !alarmSoundEnabled;
+                          setAlarmSoundEnabled(nextState);
+                          if (nextState) playChimeAlarm();
+                        }}
+                        className={`p-1.5 rounded-lg border text-xs transition flex items-center gap-1 ${
+                          alarmSoundEnabled
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            : 'bg-zinc-800 border-zinc-700 text-zinc-500'
+                        }`}
+                      >
+                        {alarmSoundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+                        <span className="text-[10px] font-medium hidden sm:inline">{alarmSoundEnabled ? 'Alarm On' : 'Muted'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Active Focus Card */}
                 {currentLocation?.tasks && currentLocation.tasks.length > 0 ? (
@@ -1006,6 +1796,7 @@ export default function SparklynApp() {
                       inventory.forEach(inv => { initialSupplies[inv.id] = inv.standardAllowancePerCycle || 1; });
                       setSelectedSupplies(initialSupplies);
                       setCleanerScreen('inventory');
+                      saveCleanerSession({ cleanerScreen: 'inventory' });
                     }}
                     className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5"
                   >
@@ -1015,12 +1806,21 @@ export default function SparklynApp() {
               </div>
             )}
 
-            {/* SCREEN 4: ROUTINE CHECKLIST & BEFORE/AFTER LIVE PHOTOS */}
+            {/* SCREEN 4: ROUTINE CHECKLIST & TWO-STAGE BEFORE/AFTER LIVE PHOTOS */}
             {cleanerScreen === 'checklist' && (
               <div className="space-y-4">
+                {/* Header */}
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800/60">
                   <button
-                    onClick={() => setCleanerScreen('hub')}
+                    onClick={() => {
+                      if (routineStage === 'in_progress' && elapsedCleaningSeconds > 0) {
+                        if (!confirm('Cleaning is currently in progress with active timer running. Are you sure you want to exit?')) {
+                          return;
+                        }
+                      }
+                      setCleanerScreen('hub');
+                      saveCleanerSession({ cleanerScreen: 'hub' });
+                    }}
                     className="text-xs text-zinc-400 hover:text-white font-medium flex items-center gap-1"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" /> Routines
@@ -1031,40 +1831,32 @@ export default function SparklynApp() {
                   </div>
                 </div>
 
-                {/* Checklist */}
-                <div className="space-y-2">
-                  {checklist.map((item, idx) => (
-                    <label
-                      key={idx}
-                      onClick={() => toggleCheck(idx)}
-                      className="flex items-start gap-3 p-3 bg-zinc-900/50 border border-zinc-800/80 rounded-xl cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={item.done}
-                        readOnly
-                        className="mt-0.5 rounded border-zinc-700 text-zinc-100 focus:ring-0"
-                      />
-                      <div className="text-xs">
-                        <p className={`font-medium ${item.done ? 'text-zinc-200 line-through opacity-70' : 'text-white'}`}>
-                          {item.text}
-                        </p>
-                      </div>
-                    </label>
-                  ))}
+                {/* Progress Stages Bar */}
+                <div className="flex items-center gap-2">
+                  <div className={`flex-1 h-1.5 rounded-full transition-all ${routineStage === 'before' ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+                  <div className={`flex-1 h-1.5 rounded-full transition-all ${routineStage === 'in_progress' ? 'bg-emerald-400' : 'bg-zinc-800'}`} />
                 </div>
 
-                {/* Photo Proofs */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-white">Routine Proof Photos</span>
-                    <span className="text-[10px] text-zinc-400">Live camera only</span>
-                  </div>
+                {/* STAGE 1: PRE-CLEAN INSPECTION & BEFORE PHOTO */}
+                {routineStage === 'before' && (
+                  <div className="space-y-4">
+                    <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Camera className="w-4 h-4 text-amber-400" />
+                        <h4 className="text-xs font-bold text-amber-300">Stage 1 of 2: Pre-Clean Inspection Proof</h4>
+                      </div>
+                      <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                        Inspect the area before touching anything. Take a live photo showing the pre-cleaning state. Once captured, you can start the cleaning timer and perform the tasks.
+                      </p>
+                    </div>
 
-                  <div className="grid grid-cols-2 gap-2.5">
-                    {/* Before Card */}
-                    <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
-                      <span className="text-[11px] font-medium text-zinc-300">Before Clean</span>
+                    {/* Pre-Clean Photo Capture */}
+                    <div className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-2xl text-center space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-white">Before Clean Photo Proof</span>
+                        <span className="text-[10px] text-zinc-400">Live camera only</span>
+                      </div>
+
                       <input
                         type="file"
                         ref={beforeInputRef}
@@ -1073,55 +1865,202 @@ export default function SparklynApp() {
                         className="hidden"
                         onChange={e => handleProofPhotoCapture('before', e)}
                       />
+
                       <div
                         onClick={() => beforeInputRef.current?.click()}
-                        className="aspect-square bg-zinc-950 rounded-lg border border-dashed border-zinc-700 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-500 overflow-hidden"
+                        className={`aspect-video w-full rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition overflow-hidden relative ${
+                          beforePhoto ? 'border-emerald-500/50 bg-black' : 'border-zinc-700 bg-zinc-950 hover:border-zinc-500'
+                        }`}
                       >
                         {beforePhoto ? (
-                          <img src={beforePhoto} className="w-full h-full object-cover" alt="Before clean" />
-                        ) : (
                           <>
-                            <Camera className="w-5 h-5 text-zinc-500" />
-                            <span className="text-[10px] text-zinc-500 mt-1">Tap to capture</span>
+                            <img src={beforePhoto} className="w-full h-full object-cover" alt="Before clean proof" />
+                            <div className="absolute bottom-2 left-2 right-2 bg-black/70 backdrop-blur-sm rounded-lg py-1 px-2 flex items-center justify-between text-[10px] text-white">
+                              <span className="flex items-center gap-1 text-emerald-400">
+                                <CheckCircle2 className="w-3 h-3" /> Pre-clean photo recorded
+                              </span>
+                              <span className="text-zinc-300 underline">Tap to retake</span>
+                            </div>
                           </>
+                        ) : (
+                          <div className="space-y-1 text-center p-4">
+                            <div className="w-10 h-10 rounded-full bg-zinc-800 mx-auto flex items-center justify-center">
+                              <Camera className="w-5 h-5 text-amber-400" />
+                            </div>
+                            <p className="text-xs font-semibold text-white">Tap to take Before Clean photo</p>
+                            <p className="text-[10px] text-zinc-500">Show restrooms, surfaces, or floors as found</p>
+                          </div>
                         )}
                       </div>
                     </div>
 
-                    {/* After Card */}
-                    <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
-                      <span className="text-[11px] font-medium text-emerald-400">After Clean Proof</span>
-                      <input
-                        type="file"
-                        ref={afterInputRef}
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={e => handleProofPhotoCapture('after', e)}
-                      />
-                      <div
-                        onClick={() => afterInputRef.current?.click()}
-                        className="aspect-square bg-zinc-950 rounded-lg border border-dashed border-zinc-700 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-500 overflow-hidden"
-                      >
-                        {afterPhoto ? (
-                          <img src={afterPhoto} className="w-full h-full object-cover" alt="After clean" />
-                        ) : (
-                          <>
-                            <Camera className="w-5 h-5 text-zinc-500" />
-                            <span className="text-[10px] text-zinc-500 mt-1">Tap to capture</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    {/* Unlock Stage 2 Button */}
+                    <button
+                      type="button"
+                      disabled={!beforePhoto}
+                      onClick={beginCleaningPhase}
+                      className="w-full py-3.5 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs tracking-wide transition shadow-md active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Timer className="w-4 h-4 text-zinc-950" /> Begin Cleaning Phase (Start Live Timer) <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    {!beforePhoto && (
+                      <p className="text-[11px] text-zinc-500 text-center">
+                        Take the Before photo above to unlock the physical cleaning phase
+                      </p>
+                    )}
                   </div>
-                </div>
+                )}
 
-                <button
-                  onClick={submitRoutineAndGoToInventory}
-                  className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99] flex items-center justify-center gap-1.5"
-                >
-                  Next: Log Supplies Used <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+                {/* STAGE 2: ACTIVE CLEANING IN PROGRESS & AFTER CLEAN PROOF */}
+                {routineStage === 'in_progress' && (
+                  <div className="space-y-4">
+                    {/* Live Timer Banner */}
+                    <div className="p-3 bg-gradient-to-r from-emerald-950/40 via-zinc-900 to-zinc-900 border border-emerald-500/30 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center relative">
+                          <span className="absolute inset-0 rounded-xl bg-emerald-400/30 animate-ping opacity-75" />
+                          <Timer className="w-4 h-4 text-emerald-400 relative z-10" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                              Active Cleaning Phase
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-300">
+                            Started at {routineStartedAt ? new Date(routineStartedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-base font-mono font-bold text-white tracking-wider">
+                          {formatElapsedTimer(elapsedCleaningSeconds)}
+                        </div>
+                        <span className="text-[10px] text-emerald-400 font-medium">Elapsed</span>
+                      </div>
+                    </div>
+
+                    {/* SOP Checklist */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-white">SOP Task Checklist</span>
+                        <span className="text-[10px] text-zinc-400">
+                          {checklist.filter(c => c.done).length} of {checklist.length} completed
+                        </span>
+                      </div>
+
+                      {checklist.map((item, idx) => (
+                        <label
+                          key={idx}
+                          onClick={() => toggleCheck(idx)}
+                          className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${
+                            item.done
+                              ? 'bg-zinc-900/30 border-zinc-800/50 opacity-80'
+                              : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.done}
+                            readOnly
+                            className="mt-0.5 rounded border-zinc-700 text-emerald-500 focus:ring-0"
+                          />
+                          <p className={`text-xs ${item.done ? 'text-zinc-400 line-through' : 'text-white font-medium'}`}>
+                            {item.text}
+                          </p>
+                        </label>
+                      ))}
+                    </div>
+
+                    {/* Proof Photos Side-by-Side: Before (Locked) & After (Live Capture) */}
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-white">Proof Comparison</span>
+                        <span className="text-[10px] text-zinc-400">Before & After Verification</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {/* Before Clean Thumbnail */}
+                        <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
+                          <div className="flex items-center justify-center gap-1 text-[11px] font-medium text-zinc-400">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                            <span>Before Clean</span>
+                          </div>
+                          <div className="aspect-square bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden relative">
+                            {beforePhoto ? (
+                              <img src={beforePhoto} className="w-full h-full object-cover" alt="Before clean" />
+                            ) : (
+                              <span className="text-[10px] text-zinc-600">No before photo</span>
+                            )}
+                            <div className="absolute top-1 left-1 bg-black/70 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-zinc-300">
+                              Stage 1
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* After Clean Live Camera Box */}
+                        <div className="p-2.5 bg-zinc-900/50 border border-emerald-500/30 rounded-xl text-center space-y-1.5">
+                          <div className="flex items-center justify-center gap-1 text-[11px] font-medium text-emerald-400">
+                            <Camera className="w-3 h-3 text-emerald-400" />
+                            <span>After Clean Proof</span>
+                          </div>
+                          <input
+                            type="file"
+                            ref={afterInputRef}
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={e => handleProofPhotoCapture('after', e)}
+                          />
+                          <div
+                            onClick={() => afterInputRef.current?.click()}
+                            className={`aspect-square rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition overflow-hidden relative ${
+                              afterPhoto ? 'border-emerald-500 bg-black' : 'border-zinc-700 bg-zinc-950 hover:border-emerald-500/60'
+                            }`}
+                          >
+                            {afterPhoto ? (
+                              <>
+                                <img src={afterPhoto} className="w-full h-full object-cover" alt="After clean proof" />
+                                <div className="absolute bottom-1 left-1 right-1 bg-black/70 backdrop-blur-sm rounded py-0.5 px-1 text-[9px] text-emerald-400 text-center font-medium">
+                                  Captured • Retake
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-5 h-5 text-emerald-400" />
+                                <span className="text-[10px] text-zinc-400 mt-1 font-medium">Tap to capture</span>
+                                <span className="text-[9px] text-zinc-500">After Clean</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Submit Button */}
+                    <button
+                      type="button"
+                      onClick={submitRoutineAndGoToInventory}
+                      disabled={isSubmittingRoutine || !afterPhoto}
+                      className="w-full py-3.5 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99] flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isSubmittingRoutine ? (
+                        <>
+                          <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Verifying & Saving Routine...
+                        </>
+                      ) : (
+                        <>
+                          Complete Routine & Log Supplies Used <ArrowRight className="w-3.5 h-3.5" />
+                        </>
+                      )}
+                    </button>
+                    {!afterPhoto && (
+                      <p className="text-[11px] text-zinc-500 text-center">
+                        Take the After Clean photo above once cleaning is finished to proceed
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1130,7 +2069,10 @@ export default function SparklynApp() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800/60">
                   <button
-                    onClick={() => setCleanerScreen('hub')}
+                    onClick={() => {
+                      setCleanerScreen('hub');
+                      saveCleanerSession({ cleanerScreen: 'hub' });
+                    }}
                     className="text-xs text-zinc-400 hover:text-white font-medium flex items-center gap-1"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" /> Cancel
@@ -1411,28 +2353,35 @@ export default function SparklynApp() {
                 {adminTab === 'attendance' && (
                   <div className="space-y-3">
                     <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Morning Attendance Feed ({attendance.length})</h3>
-                      <p className="text-[11px] text-zinc-500">Live selfie & GPS geofence checks</p>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Daily Attendance Feed ({attendance.length})</h3>
+                      <p className="text-[11px] text-zinc-500">Morning Clock-In & Evening Clock-Out (WAT)</p>
                     </div>
 
                     <div className="space-y-3">
                       {attendance.length === 0 ? (
                         <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-1">
                           <p className="font-semibold text-white">No attendance records today</p>
-                          <p className="text-[11px] text-zinc-500">Cleaners will appear here as they clock in with live selfies.</p>
+                          <p className="text-[11px] text-zinc-500">Cleaners will appear here as they clock in and clock out.</p>
                         </div>
                       ) : (
-                        attendance.map(att => (
-                          <div key={att.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2.5">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="text-xs font-bold text-white">{att.cleanerName}</p>
-                                <p className="text-[11px] text-zinc-400">📍 {att.locationName}</p>
+                        attendance.map(att => {
+                          const isClockOut = att.id.includes('-out-');
+                          return (
+                            <div key={att.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-xs font-bold text-white">{att.cleanerName}</p>
+                                  <p className="text-[11px] text-zinc-400">📍 {att.locationName}</p>
+                                </div>
+                                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                                  isClockOut
+                                    ? 'text-violet-400 bg-violet-500/10 border-violet-500/20'
+                                    : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                                }`}>
+                                  {isClockOut ? <Moon className="w-3 h-3 text-violet-400" /> : <Sun className="w-3 h-3 text-emerald-400" />}
+                                  {isClockOut ? 'Evening Clock-Out' : 'Morning Clock-In'}
+                                </span>
                               </div>
-                              <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Clocked In
-                              </span>
-                            </div>
 
                             {/* Image with clickable Google Maps overlay button */}
                             <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800 group">
@@ -1453,8 +2402,8 @@ export default function SparklynApp() {
                               <div className="flex items-center justify-between text-[11px]">
                                 <span className="text-zinc-400 flex items-center gap-1">
                                   <Clock className="w-3 h-3 text-zinc-500" />
-                                  Clocked In: <span className="text-zinc-200 font-medium">
-                                    {att.timestamp ? new Date(att.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now'}
+                                  {isClockOut ? 'Clocked Out:' : 'Clocked In:'} <span className="text-zinc-200 font-medium">
+                                    {att.timestamp ? new Date(att.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now'} WAT
                                   </span>
                                 </span>
                                 <span className="text-[10px] text-zinc-500 font-mono">
@@ -1477,7 +2426,8 @@ export default function SparklynApp() {
                               </a>
                             </div>
                           </div>
-                        ))
+                        );
+                      })
                       )}
                     </div>
                   </div>
@@ -1498,44 +2448,72 @@ export default function SparklynApp() {
                           <p className="text-[11px] text-zinc-500">Before & After photo proofs will be logged here as routines are executed.</p>
                         </div>
                       ) : (
-                        routines.map(rout => (
-                          <div key={rout.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2.5">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="text-xs font-bold text-white">{rout.taskTitle}</p>
-                                <p className="text-[11px] text-zinc-400">{rout.cleanerName} • {rout.locationName}</p>
-                              </div>
-                              <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                                Cycle {rout.cycleNumber || 1} • Verified
-                              </span>
-                            </div>
+                        routines.map(rout => {
+                          const duration = rout.durationMinutes || (Array.isArray(rout.checklist) && rout.checklist.find((c: any) => c.item === '__meta__')?.durationMinutes);
+                          const startedAtTime = rout.startedAt || (Array.isArray(rout.checklist) && rout.checklist.find((c: any) => c.item === '__meta__')?.startedAt);
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <span className="text-[10px] text-zinc-400 block mb-1">Before Clean</span>
-                                <div className="aspect-square rounded-lg bg-black overflow-hidden border border-zinc-800">
-                                  <img src={rout.beforePhotoUrl} className="w-full h-full object-cover" alt="Before clean" />
+                          return (
+                            <div key={rout.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-xs font-bold text-white">{rout.taskTitle}</p>
+                                  <p className="text-[11px] text-zinc-400">{rout.cleanerName} • {rout.locationName}</p>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  {duration ? (
+                                    <span className="text-[10px] text-amber-400 font-medium bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20 flex items-center gap-1">
+                                      <Timer className="w-3 h-3" /> {duration}m clean
+                                    </span>
+                                  ) : null}
+                                  <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                    Cycle {rout.cycleNumber || 1} • Verified
+                                  </span>
                                 </div>
                               </div>
-                              <div>
-                                <span className="text-[10px] text-emerald-400 block mb-1">After Clean</span>
-                                <div className="aspect-square rounded-lg bg-black overflow-hidden border border-emerald-500/40">
-                                  <img src={rout.afterPhotoUrl} className="w-full h-full object-cover" alt="After clean" />
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                                    <span>Before Clean</span>
+                                    {startedAtTime && (
+                                      <span className="text-zinc-500">{new Date(startedAtTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    )}
+                                  </div>
+                                  <div className="aspect-square rounded-lg bg-black overflow-hidden border border-zinc-800">
+                                    <img src={rout.beforePhotoUrl} className="w-full h-full object-cover" alt="Before clean" />
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="flex items-center justify-between text-[10px] text-emerald-400 mb-1">
+                                    <span>After Clean</span>
+                                    {rout.completedAt && (
+                                      <span className="text-emerald-500/80">{new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    )}
+                                  </div>
+                                  <div className="aspect-square rounded-lg bg-black overflow-hidden border border-emerald-500/40">
+                                    <img src={rout.afterPhotoUrl} className="w-full h-full object-cover" alt="After clean" />
+                                  </div>
                                 </div>
                               </div>
-                            </div>
 
-                            <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/60">
-                              <span className="flex items-center gap-1 text-zinc-300">
-                                <Clock className="w-3 h-3 text-zinc-500" />
-                                Completed: {rout.completedAt ? new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
-                              </span>
-                              <span className="text-zinc-500 font-mono">
-                                {rout.completedAt ? new Date(rout.completedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-                              </span>
+                              <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/60">
+                                <span className="flex items-center gap-1 text-zinc-300">
+                                  <Clock className="w-3 h-3 text-zinc-500" />
+                                  {startedAtTime ? (
+                                    <span>
+                                      {new Date(startedAtTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} → {new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  ) : (
+                                    <span>Completed: {rout.completedAt ? new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}</span>
+                                  )}
+                                </span>
+                                <span className="text-zinc-500 font-mono">
+                                  {rout.completedAt ? new Date(rout.completedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -1962,6 +2940,113 @@ export default function SparklynApp() {
                 className="flex-1 py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs"
               >
                 Save Item
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL 5: ROUTINE CLEANING REMINDER ALARM MODAL           */}
+      {/* ======================================================== */}
+      {alarmModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-gradient-to-b from-zinc-900 to-zinc-950 border-2 border-amber-500/60 rounded-3xl p-6 text-center space-y-4 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Pulsing glow ring */}
+            <div className="absolute -top-12 -left-12 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+            <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+
+            {/* Pulsing Bell Icon */}
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center relative shadow-lg">
+              <span className="absolute inset-0 rounded-2xl bg-amber-400/20 animate-ping opacity-75" />
+              <Bell className="w-8 h-8 text-amber-400 animate-bounce relative z-10" />
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold tracking-widest uppercase text-amber-400 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                Routine Cleaning Reminder
+              </span>
+              <h3 className="text-lg font-bold text-white pt-1">
+                {alarmTaskTitle || (currentLocation?.tasks?.[0]?.name || 'Routine SOP')}
+              </h3>
+              <p className="text-xs text-zinc-300">
+                Scheduled interval: <span className="font-semibold text-white">{alarmTaskFreq || (currentLocation?.tasks?.[0]?.frequency || 'Every 2 Hours')}</span>
+              </p>
+              {nextDueRoutine?.isOverdue && nextDueRoutine.diffMinutes > 0 && (
+                <p className="text-[11px] text-amber-400 font-medium">
+                  Due {nextDueRoutine.diffMinutes} minute{nextDueRoutine.diffMinutes === 1 ? '' : 's'} ago
+                </p>
+              )}
+            </div>
+
+            <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded-xl text-left text-xs text-zinc-300 space-y-1">
+              <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]">
+                <MapPin className="w-3.5 h-3.5 text-zinc-500" />
+                <span>{currentLocation?.name || 'Assigned Site'}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>2-Stage Proof: Pre-Clean photo required before start</span>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAlarmModalOpen(false);
+                  const task = alarmTaskTitle || (currentLocation?.tasks?.[0]?.name || 'General Routine Clean');
+                  const freq = alarmTaskFreq || (currentLocation?.tasks?.[0]?.frequency || 'Every 2 Hours');
+                  startRoutine(task, freq);
+                }}
+                className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs tracking-wide transition shadow-lg flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <Sparkles className="w-4 h-4 text-zinc-950" /> Start Routine Now
+              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlarmModalOpen(false);
+                    setSnoozedUntil(Date.now() + 10 * 60 * 1000); // 10 minutes snooze
+                  }}
+                  className="py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-xl text-xs transition border border-zinc-700"
+                >
+                  ⏰ Snooze 10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlarmModalOpen(false)}
+                  className="py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 font-medium rounded-xl text-xs transition border border-zinc-800"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+
+            {/* Alarm Sound Toggle in Modal */}
+            <div className="pt-1 flex items-center justify-center gap-2 text-[11px] text-zinc-400">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextState = !alarmSoundEnabled;
+                  setAlarmSoundEnabled(nextState);
+                  if (nextState) playChimeAlarm();
+                }}
+                className="hover:text-white flex items-center gap-1 transition"
+              >
+                {alarmSoundEnabled ? (
+                  <>
+                    <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Alarm chime enabled</span>
+                  </>
+                ) : (
+                  <>
+                    <BellOff className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Alarm chime muted</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
