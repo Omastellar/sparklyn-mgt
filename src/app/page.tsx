@@ -988,25 +988,37 @@ export default function SparklynApp() {
         return;
       }
 
-      // Pre-fill inventory counters with standard
-      const initialSupplies: { [key: string]: number } = {};
-      inventory.forEach(inv => {
-        initialSupplies[inv.id] = inv.standardAllowancePerCycle || 1;
-      });
-      setSelectedSupplies(initialSupplies);
-      setShowAbuseWarning(false);
       setBeforePhoto(null);
       setAfterPhoto(null);
       setRoutineStartedAt(null);
       setRoutineStage('before');
       setElapsedCleaningSeconds(0);
-      setCleanerScreen('inventory');
-      saveCleanerSession({
-        cleanerScreen: 'inventory',
-        routineStage: 'before',
-        routineStartedAt: null,
-        beforePhoto: null
-      });
+
+      // If no inventory items exist, complete routine immediately and return to hub
+      if (inventory.length === 0) {
+        alert('Routine proof successfully submitted!');
+        setCleanerScreen('hub');
+        saveCleanerSession({
+          cleanerScreen: 'hub',
+          routineStage: 'before',
+          routineStartedAt: null,
+          beforePhoto: null
+        });
+      } else {
+        const initialSupplies: { [key: string]: number } = {};
+        inventory.forEach(inv => {
+          initialSupplies[inv.id] = inv.standardAllowancePerCycle || 1;
+        });
+        setSelectedSupplies(initialSupplies);
+        setShowAbuseWarning(false);
+        setCleanerScreen('inventory');
+        saveCleanerSession({
+          cleanerScreen: 'inventory',
+          routineStage: 'before',
+          routineStartedAt: null,
+          beforePhoto: null
+        });
+      }
       refreshData();
     } catch (e: any) {
       alert(e.message || 'Error submitting routine');
@@ -1363,10 +1375,10 @@ export default function SparklynApp() {
               <h1 className="text-sm font-bold tracking-tight text-white leading-none">Sparklyn</h1>
               <p className="text-[11px] text-zinc-400 mt-0.5 leading-none">
                 {role === 'cleaner'
-                  ? (currentCleaner ? `${currentCleaner.name} · ${currentLocation?.name || 'Assigned Site'}` : 'Cleaner Operations')
+                  ? (currentCleaner ? `${currentCleaner.name} · ${currentLocation?.name || 'Site'}` : 'Cleaner')
                   : role === 'admin'
-                  ? (adminName ? `Admin ${adminName} · Operations Hub` : 'Admin Operations Hub')
-                  : 'Facility Operations Portal'}
+                  ? (adminName ? `Admin · ${adminName}` : 'Admin')
+                  : 'Management Portal'}
               </p>
             </div>
           </div>
@@ -1377,7 +1389,7 @@ export default function SparklynApp() {
               {role === 'admin' && (
                 <button
                   onClick={refreshData}
-                  title="Refresh data"
+                  title="Refresh"
                   className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
                 >
                   <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -1385,7 +1397,7 @@ export default function SparklynApp() {
               )}
               <button
                 onClick={handleSignOut}
-                title="Sign out of current shift or session"
+                title="Sign out"
                 className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 border border-zinc-800 hover:border-rose-500/30 transition flex items-center gap-1.5"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -1420,13 +1432,13 @@ export default function SparklynApp() {
         {/* ======================================================== */}
         {!role && sessionLoaded && (
           <div className="space-y-6 pt-6 pb-8">
-            <div className="text-center space-y-2">
+            <div className="text-center space-y-1.5">
               <div className="w-14 h-14 mx-auto rounded-2xl bg-zinc-100 text-zinc-950 font-black flex items-center justify-center text-2xl tracking-tight shadow-lg">
                 S
               </div>
-              <h2 className="text-xl font-bold tracking-tight text-white pt-1">Welcome to Sparklyn</h2>
-              <p className="text-xs text-zinc-400 max-w-xs mx-auto">
-                Enter your mobile number. The system will automatically identify you as Admin or Cleaner.
+              <h2 className="text-xl font-bold tracking-tight text-white pt-1">Sparklyn</h2>
+              <p className="text-xs text-zinc-400">
+                Enter your phone number to continue
               </p>
             </div>
 
@@ -1453,7 +1465,7 @@ export default function SparklynApp() {
                         setPhoneInput(e.target.value);
                         setLoginError('');
                       }}
-                      placeholder="e.g. 070346532037 or +234..."
+                      placeholder="070346532037 or +234..."
                       className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-300 font-mono transition"
                       autoFocus
                     />
@@ -1474,7 +1486,7 @@ export default function SparklynApp() {
                 >
                   {isLoggingIn ? (
                     <>
-                      <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Verifying Account...
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Verifying...
                     </>
                   ) : (
                     <>
@@ -1492,11 +1504,11 @@ export default function SparklynApp() {
                     onClick={() => setShowPasswordFallback(true)}
                     className="text-[11px] text-zinc-500 hover:text-zinc-300 transition"
                   >
-                    Have a master password? Sign in with password
+                    Sign in with password
                   </button>
                 ) : (
                   <div className="space-y-2.5 pt-2 text-left">
-                    <label className="block text-xs font-medium text-zinc-400">Master Admin Password</label>
+                    <label className="block text-xs font-medium text-zinc-400">Password</label>
                     <input
                       type="password"
                       value={adminPasswordInput}
@@ -1504,7 +1516,7 @@ export default function SparklynApp() {
                         setAdminPasswordInput(e.target.value);
                         setAdminError('');
                       }}
-                      placeholder="Enter master password..."
+                      placeholder="Enter password..."
                       className="w-full px-3.5 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-300 font-mono"
                     />
                     {adminError && (
@@ -1515,7 +1527,7 @@ export default function SparklynApp() {
                       onClick={unlockAdmin}
                       className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-xl text-xs transition flex items-center justify-center gap-1.5"
                     >
-                      <Lock className="w-3 h-3" /> Unlock Admin Hub
+                      <Lock className="w-3 h-3" /> Unlock Admin
                     </button>
                   </div>
                 )}
@@ -1535,22 +1547,17 @@ export default function SparklynApp() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-lg font-bold text-white flex items-center gap-1.5">
+                    <h2 className="text-base font-bold text-white flex items-center gap-1.5">
                       {attendanceMode === 'out' ? (
                         <>
-                          <Moon className="w-5 h-5 text-amber-400" /> Evening Clock-Out
+                          <Moon className="w-4 h-4 text-amber-400" /> Evening Clock-Out
                         </>
                       ) : (
                         <>
-                          <Sun className="w-5 h-5 text-emerald-400" /> Morning Attendance
+                          <Sun className="w-4 h-4 text-emerald-400" /> Morning Clock-In
                         </>
                       )}
                     </h2>
-                    <p className="text-xs text-zinc-400">
-                      {attendanceMode === 'out'
-                        ? 'Closing shift selfie & GPS geotag verification'
-                        : 'Live selfie & GPS location verification'}
-                    </p>
                   </div>
                   {attendanceMode === 'out' ? (
                     <button
@@ -1573,10 +1580,10 @@ export default function SparklynApp() {
                 <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl flex items-center justify-between">
                   <div>
                     <p className="text-xs font-semibold text-white">{currentCleaner?.name}</p>
-                    <p className="text-[11px] text-zinc-400">📍 {currentLocation?.name || 'Assigned Facility'}</p>
+                    <p className="text-[11px] text-zinc-400">📍 {currentLocation?.name || 'Assigned Site'}</p>
                   </div>
                   <span className="text-[10px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                    {attendanceMode === 'out' ? 'Closing Shift' : 'Arrival Check'}
+                    {attendanceMode === 'out' ? 'Closing Shift' : 'Arrival'}
                   </span>
                 </div>
 
@@ -1602,14 +1609,13 @@ export default function SparklynApp() {
                         muted
                         className="w-full h-full object-cover"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-3 items-center space-y-1.5">
-                        <p className="text-[11px] text-zinc-300 font-medium">Live selfie camera feed</p>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-3 items-center">
                         <button
                           type="button"
                           onClick={takeSelfie}
                           className="px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 text-xs font-semibold rounded-full shadow-lg active:scale-95 transition flex items-center gap-1.5"
                         >
-                          <Camera className="w-3.5 h-3.5" /> Snap Live Selfie
+                          <Camera className="w-3.5 h-3.5" /> Take Selfie
                         </button>
                       </div>
                     </div>
@@ -1632,14 +1638,14 @@ export default function SparklynApp() {
                 <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-1 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-400 font-medium flex items-center gap-1.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${gpsCoords ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`}></span> GPS Geotag
+                      <span className={`w-1.5 h-1.5 rounded-full ${gpsCoords ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`}></span> GPS
                     </span>
                     <span className={`text-[10px] font-semibold ${gpsCoords ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {gpsCoords ? 'GPS Fix Locked' : 'Acquiring GPS Signal...'}
+                      {gpsCoords ? 'Locked' : 'Locating...'}
                     </span>
                   </div>
                   <p className="text-[11px] font-mono text-zinc-300">
-                    {gpsCoords ? `${gpsCoords.lat.toFixed(4)}° N, ${gpsCoords.lng.toFixed(4)}° E (±5m)` : 'Please ensure device location is enabled'}
+                    {gpsCoords ? `${gpsCoords.lat.toFixed(4)}° N, ${gpsCoords.lng.toFixed(4)}° E` : 'Enabling GPS location'}
                   </p>
                 </div>
 
@@ -1654,11 +1660,11 @@ export default function SparklynApp() {
                     </>
                   ) : attendanceMode === 'out' ? (
                     <>
-                      Confirm Evening Clock-Out & Close Shift ✓
+                      Confirm Clock-Out ✓
                     </>
                   ) : (
                     <>
-                      Confirm Morning Attendance & View Routines <ArrowRight className="w-3.5 h-3.5" />
+                      Confirm Clock-In <ArrowRight className="w-3.5 h-3.5" />
                     </>
                   )}
                 </button>
@@ -1692,7 +1698,6 @@ export default function SparklynApp() {
                       <span>Nigeria Time:</span>
                       <span className="font-mono text-white font-semibold">{nigeriaTime.timeString} WAT</span>
                     </div>
-                    <span className="text-[10px] text-zinc-400">2 Checks / Day</span>
                   </div>
 
                   {/* Morning Clock-In Status */}
@@ -1724,7 +1729,7 @@ export default function SparklynApp() {
                             <p className="text-[10px] text-zinc-400">
                               {clockOutTime
                                 ? `Completed at ${new Date(clockOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WAT`
-                                : 'Shift officially closed'}
+                                : 'Shift closed'}
                             </p>
                           </div>
                         </div>
@@ -1733,25 +1738,17 @@ export default function SparklynApp() {
                         </span>
                       </div>
                     ) : nigeriaTime.isBeforeClockOut ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <div className="flex items-center gap-2">
-                            <Moon className="w-4 h-4 text-amber-400" />
-                            <div>
-                              <p className="font-medium text-white">Evening Clock-Out</p>
-                              <p className="text-[10px] text-zinc-400">
-                                Window: 3:30 PM – 5:00 PM WAT
-                              </p>
-                            </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <Moon className="w-4 h-4 text-amber-400" />
+                          <div>
+                            <p className="font-medium text-white">Evening Clock-Out</p>
+                            <p className="text-[10px] text-zinc-400">3:30 PM – 5:00 PM WAT</p>
                           </div>
-                          <span className="text-[10px] font-mono text-zinc-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 flex items-center gap-1">
-                            <Lock className="w-3 h-3 text-zinc-500" /> Unlocks 3:30 PM
-                          </span>
                         </div>
-                        <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800/60 text-[11px] text-zinc-400 flex items-center gap-2">
-                          <Lock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                          <span>Cleaners cannot clock out before 3:30 PM. Keep executing your scheduled routine cycles.</span>
-                        </div>
+                        <span className="text-[10px] font-mono text-zinc-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 flex items-center gap-1">
+                          <Lock className="w-3 h-3 text-zinc-500" /> Unlocks 3:30 PM
+                        </span>
                       </div>
                     ) : (
                       <div className="space-y-2.5">
@@ -1759,14 +1756,12 @@ export default function SparklynApp() {
                           <div className="flex items-center gap-2">
                             <Moon className="w-4 h-4 text-emerald-400" />
                             <div>
-                              <p className="font-medium text-white">Evening Clock-Out Window Open</p>
-                              <p className="text-[10px] text-emerald-400">
-                                3:30 PM – 5:00 PM WAT
-                              </p>
+                              <p className="font-medium text-white">Evening Clock-Out Open</p>
+                              <p className="text-[10px] text-emerald-400">3:30 PM – 5:00 PM WAT</p>
                             </div>
                           </div>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-pulse">
-                            Ready to Clock Out
+                            Ready
                           </span>
                         </div>
                         <button
@@ -1774,7 +1769,7 @@ export default function SparklynApp() {
                           onClick={openClockOut}
                           className="w-full py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs transition active:scale-[0.99] flex items-center justify-center gap-1.5 shadow-sm"
                         >
-                          <Camera className="w-3.5 h-3.5" /> Clock Out for Today (Evening Selfie & GPS)
+                          <Camera className="w-3.5 h-3.5" /> Clock Out (Selfie & GPS)
                         </button>
                       </div>
                     )}
@@ -1818,7 +1813,7 @@ export default function SparklynApp() {
                         <Timer className="w-4 h-4 text-emerald-400" />
                       </div>
                       <div>
-                        <p className="text-xs font-medium text-white">Next Scheduled Routine</p>
+                        <p className="text-xs font-medium text-white">Next Routine</p>
                         <p className="text-[10px] text-zinc-400">
                           {nextDueRoutine
                             ? `${nextDueRoutine.taskName} at ${nextDueRoutine.timeString} (in ${nextDueRoutine.diffMinutes}m)`
@@ -1853,12 +1848,12 @@ export default function SparklynApp() {
                   <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl space-y-3">
                     <div className="flex items-start justify-between">
                       <div>
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Next Scheduled Task</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Next Task</span>
                         <h3 className="text-base font-bold text-white mt-0.5">
                           {currentLocation.tasks[0].name}
                         </h3>
                         <p className="text-xs text-zinc-400">
-                          Configured Interval: <span className="text-zinc-200 font-semibold">{currentLocation.tasks[0].frequency}</span>
+                          Interval: <span className="text-zinc-200 font-semibold">{currentLocation.tasks[0].frequency}</span>
                         </p>
                       </div>
                       <div className="text-right">
@@ -1873,33 +1868,32 @@ export default function SparklynApp() {
                       onClick={() => startRoutine(currentLocation.tasks[0].name, currentLocation.tasks[0].frequency)}
                       className="w-full py-2.5 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs transition active:scale-[0.99] flex items-center justify-center gap-1.5"
                     >
-                      Start Guided Routine <ArrowRight className="w-3.5 h-3.5" />
+                      Start Routine <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ) : (
                   <div className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-2xl text-center space-y-1.5">
-                    <p className="text-xs font-semibold text-white">No tasks configured for this site</p>
-                    <p className="text-[11px] text-zinc-400">Ask your admin to add routine tasks to {currentLocation?.name || 'this location'}.</p>
+                    <p className="text-xs font-semibold text-white">No tasks configured</p>
                   </div>
                 )}
 
-                {/* Dynamic Task List from Assigned Location */}
+                {/* Task List from Assigned Location */}
                 <div className="space-y-2">
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-                    Location Tasks ({currentLocation?.tasks.length || 0})
+                    Tasks ({currentLocation?.tasks.length || 0})
                   </h4>
 
                   {currentLocation?.tasks.map((task, idx) => (
                     <div key={idx} className="p-3 bg-zinc-900/50 border border-zinc-800/80 rounded-xl flex items-center justify-between">
                       <div>
                         <p className="text-xs font-semibold text-white">{task.name}</p>
-                        <p className="text-[11px] text-zinc-400">Frequency: {task.frequency}</p>
+                        <p className="text-[11px] text-zinc-400">{task.frequency}</p>
                       </div>
                       <button
                         onClick={() => startRoutine(task.name, task.frequency)}
                         className="text-xs font-medium px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
                       >
-                        Execute
+                        Start
                       </button>
                     </div>
                   ))}
@@ -1916,7 +1910,7 @@ export default function SparklynApp() {
                     }}
                     className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5"
                   >
-                    <Package className="w-3.5 h-3.5" /> Direct Supply Logger
+                    <Package className="w-3.5 h-3.5" /> Log Supplies
                   </button>
                 </div>
               </div>
@@ -1956,21 +1950,19 @@ export default function SparklynApp() {
                 {/* STAGE 1: PRE-CLEAN INSPECTION & BEFORE PHOTO */}
                 {routineStage === 'before' && (
                   <div className="space-y-4">
-                    <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Camera className="w-4 h-4 text-amber-400" />
-                        <h4 className="text-xs font-bold text-amber-300">Stage 1 of 2: Pre-Clean Inspection Proof</h4>
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center gap-2.5">
+                      <Camera className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-amber-300">Stage 1: Pre-Clean Photo</h4>
+                        <p className="text-[11px] text-amber-200/80">Capture area condition before cleaning begins</p>
                       </div>
-                      <p className="text-[11px] text-amber-200/80 leading-relaxed">
-                        Inspect the area before touching anything. Take a live photo showing the pre-cleaning state. Once captured, you can start the cleaning timer and perform the tasks.
-                      </p>
                     </div>
 
                     {/* Pre-Clean Photo Capture */}
                     <div className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-2xl text-center space-y-3">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-white">Before Clean Photo Proof</span>
-                        <span className="text-[10px] text-zinc-400">Live camera only</span>
+                        <span className="font-semibold text-white">Before Photo</span>
+                        <span className="text-[10px] text-zinc-400">Live camera</span>
                       </div>
 
                       <input
@@ -1993,9 +1985,9 @@ export default function SparklynApp() {
                             <img src={beforePhoto} className="w-full h-full object-cover" alt="Before clean proof" />
                             <div className="absolute bottom-2 left-2 right-2 bg-black/70 backdrop-blur-sm rounded-lg py-1 px-2 flex items-center justify-between text-[10px] text-white">
                               <span className="flex items-center gap-1 text-emerald-400">
-                                <CheckCircle2 className="w-3 h-3" /> Pre-clean photo recorded
+                                <CheckCircle2 className="w-3 h-3" /> Captured
                               </span>
-                              <span className="text-zinc-300 underline">Tap to retake</span>
+                              <span className="text-zinc-300 underline">Retake</span>
                             </div>
                           </>
                         ) : (
@@ -2003,8 +1995,7 @@ export default function SparklynApp() {
                             <div className="w-10 h-10 rounded-full bg-zinc-800 mx-auto flex items-center justify-center">
                               <Camera className="w-5 h-5 text-amber-400" />
                             </div>
-                            <p className="text-xs font-semibold text-white">Tap to take Before Clean photo</p>
-                            <p className="text-[10px] text-zinc-500">Show restrooms, surfaces, or floors as found</p>
+                            <p className="text-xs font-semibold text-white">Take Before Photo</p>
                           </div>
                         )}
                       </div>
@@ -2017,13 +2008,8 @@ export default function SparklynApp() {
                       onClick={beginCleaningPhase}
                       className="w-full py-3.5 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl text-xs tracking-wide transition shadow-md active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      <Timer className="w-4 h-4 text-zinc-950" /> Begin Cleaning Phase (Start Live Timer) <ArrowRight className="w-3.5 h-3.5" />
+                      <Timer className="w-4 h-4 text-zinc-950" /> Start Cleaning Phase <ArrowRight className="w-3.5 h-3.5" />
                     </button>
-                    {!beforePhoto && (
-                      <p className="text-[11px] text-zinc-500 text-center">
-                        Take the Before photo above to unlock the physical cleaning phase
-                      </p>
-                    )}
                   </div>
                 )}
 
@@ -2038,13 +2024,11 @@ export default function SparklynApp() {
                           <Timer className="w-4 h-4 text-emerald-400 relative z-10" />
                         </div>
                         <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                              Active Cleaning Phase
-                            </span>
-                          </div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                            Cleaning In Progress
+                          </span>
                           <p className="text-xs text-zinc-300">
-                            Started at {routineStartedAt ? new Date(routineStartedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
+                            Started: {routineStartedAt ? new Date(routineStartedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
                           </p>
                         </div>
                       </div>
@@ -2059,9 +2043,9 @@ export default function SparklynApp() {
                     {/* SOP Checklist */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-white">SOP Task Checklist</span>
+                        <span className="font-semibold text-white">Checklist</span>
                         <span className="text-[10px] text-zinc-400">
-                          {checklist.filter(c => c.done).length} of {checklist.length} completed
+                          {checklist.filter(c => c.done).length} of {checklist.length}
                         </span>
                       </div>
 
@@ -2091,8 +2075,7 @@ export default function SparklynApp() {
                     {/* Proof Photos Side-by-Side: Before (Locked) & After (Live Capture) */}
                     <div className="space-y-2 pt-1">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-white">Proof Comparison</span>
-                        <span className="text-[10px] text-zinc-400">Before & After Verification</span>
+                        <span className="font-semibold text-white">Proof Photos</span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2.5">
@@ -2100,17 +2083,14 @@ export default function SparklynApp() {
                         <div className="p-2.5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-center space-y-1.5">
                           <div className="flex items-center justify-center gap-1 text-[11px] font-medium text-zinc-400">
                             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                            <span>Before Clean</span>
+                            <span>Before</span>
                           </div>
                           <div className="aspect-square bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden relative">
                             {beforePhoto ? (
                               <img src={beforePhoto} className="w-full h-full object-cover" alt="Before clean" />
                             ) : (
-                              <span className="text-[10px] text-zinc-600">No before photo</span>
+                              <span className="text-[10px] text-zinc-600">None</span>
                             )}
-                            <div className="absolute top-1 left-1 bg-black/70 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-zinc-300">
-                              Stage 1
-                            </div>
                           </div>
                         </div>
 
@@ -2118,7 +2098,7 @@ export default function SparklynApp() {
                         <div className="p-2.5 bg-zinc-900/50 border border-emerald-500/30 rounded-xl text-center space-y-1.5">
                           <div className="flex items-center justify-center gap-1 text-[11px] font-medium text-emerald-400">
                             <Camera className="w-3 h-3 text-emerald-400" />
-                            <span>After Clean Proof</span>
+                            <span>After Clean</span>
                           </div>
                           <input
                             type="file"
@@ -2144,8 +2124,7 @@ export default function SparklynApp() {
                             ) : (
                               <>
                                 <Camera className="w-5 h-5 text-emerald-400" />
-                                <span className="text-[10px] text-zinc-400 mt-1 font-medium">Tap to capture</span>
-                                <span className="text-[9px] text-zinc-500">After Clean</span>
+                                <span className="text-[10px] text-zinc-400 mt-1 font-medium">Take After Photo</span>
                               </>
                             )}
                           </div>
@@ -2162,25 +2141,24 @@ export default function SparklynApp() {
                     >
                       {isSubmittingRoutine ? (
                         <>
-                          <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Verifying & Saving Routine...
+                          <RotateCcw className="w-3.5 h-3.5 animate-spin" /> Saving Routine...
+                        </>
+                      ) : inventory.length > 0 ? (
+                        <>
+                          Next: Log Supplies <ArrowRight className="w-3.5 h-3.5" />
                         </>
                       ) : (
                         <>
-                          Complete Routine & Log Supplies Used <ArrowRight className="w-3.5 h-3.5" />
+                          Complete Routine ✓
                         </>
                       )}
                     </button>
-                    {!afterPhoto && (
-                      <p className="text-[11px] text-zinc-500 text-center">
-                        Take the After Clean photo above once cleaning is finished to proceed
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
             )}
 
-            {/* SCREEN 5: INVENTORY LOGGING WITH ABUSE DETECTION */}
+            {/* SCREEN 5: INVENTORY LOGGING */}
             {cleanerScreen === 'inventory' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800/60">
@@ -2191,26 +2169,32 @@ export default function SparklynApp() {
                     }}
                     className="text-xs text-zinc-400 hover:text-white font-medium flex items-center gap-1"
                   >
-                    <ArrowLeft className="w-3.5 h-3.5" /> Cancel
+                    <ArrowLeft className="w-3.5 h-3.5" /> Back
                   </button>
-                  <span className="text-xs font-bold text-white">Log Supplies Used</span>
-                  <span className="text-[10px] text-zinc-400">Anti-Abuse</span>
+                  <span className="text-xs font-bold text-white">Log Supplies</span>
+                  <span className="text-[10px] text-zinc-500">Usage</span>
                 </div>
-
-                <p className="text-xs text-zinc-400">Enter supplies consumed during this cycle to keep inventory balances accurate.</p>
 
                 <div className="space-y-2">
                   {inventory.length === 0 ? (
-                    <div className="p-4 text-center bg-zinc-900/40 border border-zinc-800 rounded-xl text-xs text-zinc-400">
+                    <div className="p-4 text-center bg-zinc-900/40 border border-zinc-800 rounded-xl text-xs text-zinc-400 space-y-2">
                       <p className="font-semibold text-white">No supplies tracked</p>
-                      <p className="text-[11px] text-zinc-500 mt-0.5">Your manager has not configured any tracked cleaning items yet.</p>
+                      <button
+                        onClick={() => {
+                          setCleanerScreen('hub');
+                          saveCleanerSession({ cleanerScreen: 'hub' });
+                        }}
+                        className="px-3 py-1.5 bg-zinc-800 text-zinc-200 rounded-lg text-xs"
+                      >
+                        Return to Hub
+                      </button>
                     </div>
                   ) : (
                     inventory.map(item => (
                       <div key={item.id} className="p-3 bg-zinc-900/50 border border-zinc-800/80 rounded-xl flex items-center justify-between">
                         <div>
                           <p className="text-xs font-semibold text-white">{item.name}</p>
-                          <p className="text-[10px] text-zinc-400">Standard SOP: ~{item.standardAllowancePerCycle} {item.unit}</p>
+                          <p className="text-[10px] text-zinc-400">Allowance: {item.standardAllowancePerCycle} {item.unit}</p>
                         </div>
                         <div className="flex items-center gap-2">
                           <button
@@ -2238,20 +2222,22 @@ export default function SparklynApp() {
                 {showAbuseWarning && (
                   <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs space-y-1">
                     <div className="flex items-center gap-1.5 text-amber-400 font-semibold">
-                      <AlertTriangle className="w-4 h-4" /> Abnormal Supply Spike Detected
+                      <AlertTriangle className="w-4 h-4" /> High Quantity Alert
                     </div>
                     <p className="text-[11px] text-zinc-300">
-                      You selected a quantity more than 3x the standard baseline. This routine will be flagged for Manager review.
+                      Exceeds standard allowance. Flagged for manager review.
                     </p>
                   </div>
                 )}
 
-                <button
-                  onClick={submitSupplyConsumption}
-                  className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99]"
-                >
-                  Confirm & Submit Routine Log ✓
-                </button>
+                {inventory.length > 0 && (
+                  <button
+                    onClick={submitSupplyConsumption}
+                    className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl text-xs tracking-wide transition shadow-sm active:scale-[0.99]"
+                  >
+                    Save & Return to Hub ✓
+                  </button>
+                )}
               </div>
             )}
 
@@ -2372,7 +2358,6 @@ export default function SparklynApp() {
                     <div className="flex items-center justify-between">
                       <div>
                         <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Locations & Schedules</h3>
-                        <p className="text-[11px] text-zinc-500">Multiple tasks & individual cleaning frequencies</p>
                       </div>
                       <button
                         onClick={openNewLocation}
@@ -2384,9 +2369,8 @@ export default function SparklynApp() {
 
                     <div className="space-y-3">
                       {locations.length === 0 ? (
-                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-1">
-                          <p className="font-semibold text-white">No locations added yet</p>
-                          <p className="text-[11px] text-zinc-500">Tap "+ Location" above to create your first facility and routine tasks.</p>
+                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500">
+                          <p>No locations added yet.</p>
                         </div>
                       ) : (
                         locations.map(loc => (
@@ -2428,7 +2412,6 @@ export default function SparklynApp() {
                     <div className="flex items-center justify-between">
                       <div>
                         <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Cleaner Directory</h3>
-                        <p className="text-[11px] text-zinc-500">Onboarded staff with mobile phone login</p>
                       </div>
                       <button
                         onClick={() => setShowCleanerModal(true)}
@@ -2440,9 +2423,8 @@ export default function SparklynApp() {
 
                     <div className="space-y-2">
                       {cleaners.length === 0 ? (
-                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-1">
-                          <p className="font-semibold text-white">No cleaners onboarded yet</p>
-                          <p className="text-[11px] text-zinc-500">Tap "+ Onboard" above to register your cleaning staff.</p>
+                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500">
+                          <p>No cleaners onboarded yet.</p>
                         </div>
                       ) : (
                         cleaners.map(c => {
@@ -2470,14 +2452,12 @@ export default function SparklynApp() {
                   <div className="space-y-3">
                     <div>
                       <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Daily Attendance Feed ({attendance.length})</h3>
-                      <p className="text-[11px] text-zinc-500">Morning Clock-In & Evening Clock-Out (WAT)</p>
                     </div>
 
                     <div className="space-y-3">
                       {attendance.length === 0 ? (
-                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-1">
-                          <p className="font-semibold text-white">No attendance records today</p>
-                          <p className="text-[11px] text-zinc-500">Cleaners will appear here as they clock in and clock out.</p>
+                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500">
+                          <p>No attendance recorded today.</p>
                         </div>
                       ) : (
                         attendance.map(att => {
@@ -2574,14 +2554,12 @@ export default function SparklynApp() {
                   <div className="space-y-3">
                     <div>
                       <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Routine Photo Proofs ({routines.length})</h3>
-                      <p className="text-[11px] text-zinc-500">Audited multiple times per day</p>
                     </div>
 
                     <div className="space-y-3">
                       {routines.length === 0 ? (
-                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-1">
-                          <p className="font-semibold text-white">No routine proofs submitted yet</p>
-                          <p className="text-[11px] text-zinc-500">Before & After photo proofs will be logged here as routines are executed.</p>
+                        <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500">
+                          <p>No routine proofs submitted yet.</p>
                         </div>
                       ) : (
                         routines.map(rout => {
@@ -2699,7 +2677,6 @@ export default function SparklynApp() {
                     <div className="flex items-center justify-between">
                       <div>
                         <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Inventory & Supplies</h3>
-                        <p className="text-[11px] text-zinc-500">Track facility chemicals & consumables</p>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -2725,17 +2702,14 @@ export default function SparklynApp() {
 
                     {/* Stock Grid */}
                     {inventory.length === 0 ? (
-                      <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-400 space-y-2">
-                        <Package className="w-8 h-8 text-zinc-600 mx-auto" />
-                        <div>
-                          <p className="font-semibold text-white">No inventory items added yet</p>
-                          <p className="text-[11px] text-zinc-500 mt-0.5">Click "+ Add Item" to configure the real chemicals and cleaning supplies used by cleaners.</p>
-                        </div>
+                      <div className="p-6 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500 space-y-2">
+                        <Package className="w-6 h-6 text-zinc-600 mx-auto" />
+                        <p>No inventory items added yet.</p>
                         <button
                           onClick={() => setShowAddItemModal(true)}
-                          className="mt-1 px-3 py-1.5 bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold rounded-lg"
+                          className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700"
                         >
-                          + Add First Item
+                          + Add Item
                         </button>
                       </div>
                     ) : (
@@ -3153,14 +3127,10 @@ export default function SparklynApp() {
               )}
             </div>
 
-            <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded-xl text-left text-xs text-zinc-300 space-y-1">
+            <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded-xl text-left text-xs text-zinc-300">
               <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]">
                 <MapPin className="w-3.5 h-3.5 text-zinc-500" />
                 <span>{currentLocation?.name || 'Assigned Site'}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>2-Stage Proof: Pre-Clean photo required before start</span>
               </div>
             </div>
 
