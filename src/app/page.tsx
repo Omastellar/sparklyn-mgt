@@ -28,7 +28,11 @@ import {
   Bell,
   BellOff,
   Volume2,
-  Timer
+  Timer,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  X
 } from 'lucide-react';
 
 interface RoutineTask {
@@ -226,6 +230,107 @@ export default function SparklynApp() {
   const [newItemMinAlert, setNewItemMinAlert] = useState(5);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Full-Screen Image Lightbox with Zoom & Pan Ability
+  const [fullScreenImage, setFullScreenImage] = useState<{
+    url: string;
+    title: string;
+    subtitle?: string;
+    time?: string;
+  } | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panPosition, setPanPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  const openFullScreenImage = (data: { url: string; title: string; subtitle?: string; time?: string }) => {
+    setFullScreenImage(data);
+    setZoomLevel(1);
+    setPanPosition({ x: 0, y: 0 });
+  };
+
+  const closeFullScreenImage = () => {
+    setFullScreenImage(null);
+    setZoomLevel(1);
+    setPanPosition({ x: 0, y: 0 });
+    setIsDragging(false);
+  };
+
+  const handleZoomIn = () => {
+    setZoomLevel(prev => Math.min(Number((prev + 0.5).toFixed(1)), 4));
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel(prev => {
+      const next = Math.max(Number((prev - 0.5).toFixed(1)), 1);
+      if (next === 1) setPanPosition({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const handleResetZoom = () => {
+    setZoomLevel(1);
+    setPanPosition({ x: 0, y: 0 });
+  };
+
+  const handleToggleZoom = () => {
+    if (zoomLevel === 1) {
+      setZoomLevel(2.5);
+    } else {
+      setZoomLevel(1);
+      setPanPosition({ x: 0, y: 0 });
+    }
+  };
+
+  const handleImageMouseDown = (e: React.MouseEvent) => {
+    if (zoomLevel <= 1) return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - panPosition.x, y: e.clientY - panPosition.y });
+  };
+
+  const handleImageMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || zoomLevel <= 1) return;
+    setPanPosition({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y
+    });
+  };
+
+  const handleImageMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleImageTouchStart = (e: React.TouchEvent) => {
+    if (zoomLevel <= 1 || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    setIsDragging(true);
+    setDragStart({ x: touch.clientX - panPosition.x, y: touch.clientY - panPosition.y });
+  };
+
+  const handleImageTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging || zoomLevel <= 1) return;
+    const touch = e.touches[0];
+    setPanPosition({
+      x: touch.clientX - dragStart.x,
+      y: touch.clientY - dragStart.y
+    });
+  };
+
+  const handleImageTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+  const handleImageWheel = (e: React.WheelEvent) => {
+    if (e.deltaY < 0) {
+      setZoomLevel(prev => Math.min(Number((prev + 0.25).toFixed(2)), 4));
+    } else {
+      setZoomLevel(prev => {
+        const next = Math.max(Number((prev - 0.25).toFixed(2)), 1);
+        if (next === 1) setPanPosition({ x: 0, y: 0 });
+        return next;
+      });
+    }
+  };
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfieInputRef = useRef<HTMLInputElement | null>(null);
   const beforeInputRef = useRef<HTMLInputElement | null>(null);
@@ -266,6 +371,17 @@ export default function SparklynApp() {
     }, 15000);
     return () => clearInterval(timer);
   }, []);
+
+  // Close full-screen lightbox on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && fullScreenImage) {
+        closeFullScreenImage();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [fullScreenImage]);
 
   // Restore session from localStorage on initial page load (prevents logout on refresh)
   useEffect(() => {
@@ -2383,15 +2499,35 @@ export default function SparklynApp() {
                                 </span>
                               </div>
 
-                            {/* Image with clickable Google Maps overlay button */}
-                            <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800 group">
-                              <img src={att.selfieUrl} className="w-full h-full object-cover" alt="Cleaner selfie" />
+                            {/* Image with clickable Google Maps overlay button and Fullscreen Zoom */}
+                            <div
+                              onClick={() => {
+                                if (att.selfieUrl) {
+                                  openFullScreenImage({
+                                    url: att.selfieUrl,
+                                    title: `${isClockOut ? 'Evening Clock-Out' : 'Morning Clock-In'} — ${att.cleanerName}`,
+                                    subtitle: `${att.locationName} • GPS: ${att.latitude?.toFixed(4)}, ${att.longitude?.toFixed(4)}`,
+                                    time: att.timestamp ? new Date(att.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : undefined
+                                  });
+                                }
+                              }}
+                              className="relative aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800 group cursor-pointer hover:border-zinc-500 transition"
+                            >
+                              <img src={att.selfieUrl} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="Cleaner selfie" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5 text-white text-xs font-semibold">
+                                <Maximize2 className="w-4 h-4 text-white" />
+                                <span>Tap to Zoom</span>
+                              </div>
+                              <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-zinc-300 flex items-center gap-1">
+                                <Maximize2 className="w-2.5 h-2.5" /> Fullscreen
+                              </div>
                               <a
                                 href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
                                 title="Open exact coordinates on Google Maps"
-                                className="absolute bottom-2 right-2 px-2.5 py-1 bg-black/80 hover:bg-black backdrop-blur rounded-lg text-[10px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 border border-emerald-500/30 transition shadow-lg"
+                                className="absolute bottom-2 right-2 px-2.5 py-1 bg-black/80 hover:bg-black backdrop-blur rounded-lg text-[10px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 border border-emerald-500/30 transition shadow-lg z-10"
                               >
                                 <MapPin className="w-3 h-3 text-emerald-400" /> Open on Map ↗
                               </a>
@@ -2479,8 +2615,27 @@ export default function SparklynApp() {
                                       <span className="text-zinc-500">{new Date(startedAtTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                     )}
                                   </div>
-                                  <div className="aspect-square rounded-lg bg-black overflow-hidden border border-zinc-800">
-                                    <img src={rout.beforePhotoUrl} className="w-full h-full object-cover" alt="Before clean" />
+                                  <div
+                                    onClick={() => {
+                                      if (rout.beforePhotoUrl) {
+                                        openFullScreenImage({
+                                          url: rout.beforePhotoUrl,
+                                          title: `Before Clean Proof — ${rout.taskTitle}`,
+                                          subtitle: `${rout.cleanerName} • ${rout.locationName}`,
+                                          time: startedAtTime ? new Date(startedAtTime).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : (rout.completedAt ? new Date(rout.completedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : undefined)
+                                        });
+                                      }
+                                    }}
+                                    className="aspect-square rounded-lg bg-black overflow-hidden border border-zinc-800 cursor-pointer relative group hover:border-zinc-500 transition"
+                                  >
+                                    <img src={rout.beforePhotoUrl} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="Before clean" />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5 text-white text-xs font-semibold">
+                                      <Maximize2 className="w-4 h-4 text-white" />
+                                      <span>Tap to Zoom</span>
+                                    </div>
+                                    <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-zinc-300 flex items-center gap-1">
+                                      <Maximize2 className="w-2.5 h-2.5" /> Fullscreen
+                                    </div>
                                   </div>
                                 </div>
                                 <div>
@@ -2490,8 +2645,27 @@ export default function SparklynApp() {
                                       <span className="text-emerald-500/80">{new Date(rout.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                     )}
                                   </div>
-                                  <div className="aspect-square rounded-lg bg-black overflow-hidden border border-emerald-500/40">
-                                    <img src={rout.afterPhotoUrl} className="w-full h-full object-cover" alt="After clean" />
+                                  <div
+                                    onClick={() => {
+                                      if (rout.afterPhotoUrl) {
+                                        openFullScreenImage({
+                                          url: rout.afterPhotoUrl,
+                                          title: `After Clean Proof — ${rout.taskTitle}`,
+                                          subtitle: `${rout.cleanerName} • ${rout.locationName}`,
+                                          time: rout.completedAt ? new Date(rout.completedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : undefined
+                                        });
+                                      }
+                                    }}
+                                    className="aspect-square rounded-lg bg-black overflow-hidden border border-emerald-500/40 cursor-pointer relative group hover:border-emerald-400 transition"
+                                  >
+                                    <img src={rout.afterPhotoUrl} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="After clean" />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5 text-emerald-300 text-xs font-semibold">
+                                      <Maximize2 className="w-4 h-4 text-emerald-400" />
+                                      <span>Tap to Zoom</span>
+                                    </div>
+                                    <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-emerald-300 flex items-center gap-1">
+                                      <Maximize2 className="w-2.5 h-2.5" /> Fullscreen
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -3049,6 +3223,137 @@ export default function SparklynApp() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL 6: FULL-SCREEN IMAGE LIGHTBOX WITH ZOOM & PAN       */}
+      {/* ======================================================== */}
+      {fullScreenImage && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex flex-col justify-between overflow-hidden select-none animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDragging) {
+              closeFullScreenImage();
+            }
+          }}
+        >
+          {/* Top Bar: Title, Metadata, Zoom Controls, Close */}
+          <div className="flex items-center justify-between p-3 sm:p-4 bg-zinc-950/80 border-b border-zinc-800/80 backdrop-blur-md z-20">
+            <div className="min-w-0 pr-2">
+              <h3 className="text-xs sm:text-sm font-bold text-white truncate flex items-center gap-2">
+                <span>{fullScreenImage.title}</span>
+                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700">
+                  {Math.round(zoomLevel * 100)}%
+                </span>
+              </h3>
+              <p className="text-[10px] sm:text-[11px] text-zinc-400 truncate">
+                {fullScreenImage.subtitle} {fullScreenImage.time ? `• ${fullScreenImage.time}` : ''}
+              </p>
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={zoomLevel <= 1}
+                title="Zoom Out (-)"
+                className="p-1.5 sm:p-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 text-white rounded-xl border border-zinc-700 transition active:scale-95"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                title="Reset Zoom to 100%"
+                className="px-2 sm:px-2.5 py-1.5 sm:py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-mono rounded-xl border border-zinc-700 transition active:scale-95"
+              >
+                100%
+              </button>
+
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={zoomLevel >= 4}
+                title="Zoom In (+)"
+                className="p-1.5 sm:p-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 text-white rounded-xl border border-zinc-700 transition active:scale-95"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={closeFullScreenImage}
+                title="Close (Esc)"
+                className="p-1.5 sm:p-2 ml-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-xl border border-zinc-700 transition active:scale-95"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Image Viewport */}
+          <div
+            className="flex-1 flex items-center justify-center p-2 sm:p-4 relative overflow-hidden cursor-default"
+            onWheel={handleImageWheel}
+            onMouseDown={handleImageMouseDown}
+            onMouseMove={handleImageMouseMove}
+            onMouseUp={handleImageMouseUp}
+            onTouchStart={handleImageTouchStart}
+            onTouchMove={handleImageTouchMove}
+            onTouchEnd={handleImageTouchEnd}
+          >
+            <img
+              src={fullScreenImage.url}
+              alt={fullScreenImage.title}
+              onDoubleClick={handleToggleZoom}
+              draggable={false}
+              style={{
+                transform: `translate(${panPosition.x}px, ${panPosition.y}px) scale(${zoomLevel})`,
+                transition: isDragging ? 'none' : 'transform 0.15s ease-out',
+                cursor: zoomLevel > 1 ? (isDragging ? 'grabbing' : 'grab') : 'zoom-in',
+                maxHeight: '82vh',
+                maxWidth: '94vw'
+              }}
+              className="object-contain rounded-xl shadow-2xl transition-transform"
+            />
+          </div>
+
+          {/* Bottom Floating Bar */}
+          <div className="p-2.5 sm:p-3 bg-zinc-950/80 border-t border-zinc-800/80 backdrop-blur-md flex items-center justify-between text-xs text-zinc-400 z-20">
+            <span className="hidden sm:inline text-[11px] text-zinc-400">
+              Double-tap or use controls to zoom • Drag to pan across image
+            </span>
+            <div className="flex items-center gap-1 sm:gap-1.5 mx-auto sm:mx-0">
+              <span className="text-[10px] sm:text-[11px] text-zinc-500 mr-1">Presets:</span>
+              {[1, 1.5, 2, 3, 4].map(scale => (
+                <button
+                  key={scale}
+                  type="button"
+                  onClick={() => {
+                    setZoomLevel(scale);
+                    if (scale === 1) setPanPosition({ x: 0, y: 0 });
+                  }}
+                  className={`px-2 py-1 rounded-lg text-[10px] sm:text-[11px] font-mono font-medium border transition ${
+                    zoomLevel === scale
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
+                  }`}
+                >
+                  {scale}x
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={closeFullScreenImage}
+              className="hidden sm:flex text-xs text-zinc-400 hover:text-white font-medium items-center gap-1"
+            >
+              Close Viewer <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       )}
