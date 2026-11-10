@@ -52,7 +52,7 @@ export interface RoutineLog {
   completedAt: string;
   startedAt?: string;
   durationMinutes?: number;
-  checklist: { item?: string; text?: string; done: boolean; startedAt?: string }[];
+  checklist: { item?: string; text?: string; done: boolean; startedAt?: string; durationMinutes?: number }[];
   beforePhotoUrl?: string;
   afterPhotoUrl?: string;
 }

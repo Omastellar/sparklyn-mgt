@@ -148,7 +148,22 @@ export async function getRoutines(): Promise<RoutineLog[]> {
       .order('completedAt', { ascending: false });
 
     if (!error && data) {
-      return data as RoutineLog[];
+      return (data as RoutineLog[]).map(r => {
+        let startedAt = r.startedAt;
+        let durationMinutes = r.durationMinutes;
+        if (!durationMinutes || !startedAt) {
+          const meta = Array.isArray(r.checklist) ? r.checklist.find((c: any) => c.item === '__meta__') : null;
+          if (meta) {
+            startedAt = startedAt || meta.startedAt;
+            durationMinutes = durationMinutes || meta.durationMinutes;
+          }
+        }
+        return {
+          ...r,
+          startedAt,
+          durationMinutes
+        };
+      });
     }
   }
   return getDb().routines;
@@ -156,7 +171,23 @@ export async function getRoutines(): Promise<RoutineLog[]> {
 
 export async function addRoutine(routine: RoutineLog): Promise<RoutineLog> {
   if (isSupabaseConfigured && supabaseAdmin) {
-    const { error } = await supabaseAdmin.from('routines').insert(routine);
+    // Only insert the exact columns that exist in the Supabase routines table.
+    // metadata (startedAt, durationMinutes) is safely preserved inside the checklist JSON.
+    const dbPayload = {
+      id: routine.id,
+      cleanerId: routine.cleanerId,
+      cleanerName: routine.cleanerName,
+      locationId: routine.locationId,
+      locationName: routine.locationName,
+      taskTitle: routine.taskTitle,
+      frequency: routine.frequency,
+      cycleNumber: routine.cycleNumber,
+      completedAt: routine.completedAt,
+      checklist: routine.checklist,
+      beforePhotoUrl: routine.beforePhotoUrl,
+      afterPhotoUrl: routine.afterPhotoUrl
+    };
+    const { error } = await supabaseAdmin.from('routines').insert(dbPayload);
     if (!error) {
       return routine;
     }
